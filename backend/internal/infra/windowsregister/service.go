@@ -67,10 +67,10 @@ type Status struct {
 	GeneratedTotal    int      `json:"generatedTotal"`
 	CanImportCurrent  bool     `json:"canImportCurrent"`
 	CanImportAll      bool     `json:"canImportAll"`
-	StartedAt         *string  `json:"startedAt"`
-	FinishedAt        *string  `json:"finishedAt"`
+	StartedAt         *string  `json:"startedAt,omitempty"`
+	FinishedAt        *string  `json:"finishedAt,omitempty"`
 	ElapsedSec        int      `json:"elapsedSec"`
-	ExitCode          *int     `json:"exitCode"`
+	ExitCode          *int     `json:"exitCode,omitempty"`
 	LastError         string   `json:"lastError"`
 	Logs              []string `json:"logs"`
 }
@@ -436,7 +436,10 @@ func (s *Service) statusLocked() Status {
 			elapsed = 0
 		}
 	}
-	logs := append([]string(nil), s.logs...)
+	logs := append([]string{}, s.logs...)
+	if missing == nil {
+		missing = []string{}
+	}
 	return Status{
 		PlatformSupported: supported,
 		Ready:             ready,
