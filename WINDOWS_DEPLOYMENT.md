@@ -117,42 +117,39 @@ deploy.bat stop
 - 定期备份 `config.yaml`、数据库与媒体目录。
 - `FIRST_RUN_CREDENTIALS.txt` 在修改首次密码后应立即删除。
 
-## Windows 浏览器注册机（可选）
+## Windows 浏览器注册机（随 deploy 自动准备）
 
-发布包会附带 `tools/windows-register` 引擎源码，但**不会**捆绑 Python 运行时、`.venv` 或浏览器。注册机会由 Go 后端作为子进程管理，仅管理员可在 WebUI 中操作。
+发布包附带 `tools/windows-register` 引擎源码。双击 `deploy.bat`（默认 `install`）时，脚本会在管理员权限下尽量自动完成：
 
-### 首次准备
+1. 检测 Python 3.10+
+2. 创建 `tools/windows-register/.venv` 并安装依赖
+3. 把 CloakBrowser Chromium 安装到包内可读路径
+4. 写入 `.browser-path`，并给 `LOCAL SERVICE` 正确 ACL
+5. 启动 grok2api 后，管理后台 **注册 → Windows 浏览器注册机** 可直接使用
 
-1. 在目标 Windows 机器安装 Python 3.10+（可加入 PATH，或稍后配置 `pythonPath`）。
-2. 在部署目录打开 PowerShell：
+### 前提
 
-```powershell
-cd tools\windows-register
-powershell -ExecutionPolicy Bypass -File .\setup.ps1 -SmokeTest
-```
+- 目标机已安装 **Python 3.10+**，且 `python` 在 PATH 中（或位于常见安装路径）
+- 首次 `deploy.bat` 需要联网下载 pip 依赖与 CloakBrowser
+- 若未安装 Python，核心 API/管理端仍可启动；注册面板会显示“运行环境未就绪”
 
-3. 启动/重启 grok2api。
-4. 登录管理后台 → **注册** 页面 → **Windows 浏览器注册机**。
-5. 确认状态显示“运行环境就绪”后，设置目标数量并开始注册。
-6. 注册完成后点击“导入本次结果”或“导入全部结果”，写入 Web / Console 账号池。
+### 使用
+
+1. 双击 `deploy.bat` 完成安装并启动
+2. 打开管理后台 → **注册**
+3. 确认“运行环境就绪”后设置目标数量并开始注册
+4. 完成后点击“导入本次结果 / 导入全部结果”
 
 ### 运行时路径
 
-| 用途 | 默认路径 |
+| 用途 | 路径 |
 | --- | --- |
 | 引擎 | `tools/windows-register` |
-| 输出 | `data/windows-register/accounts.txt` |
-| 推荐 venv | `tools/windows-register/.venv/Scripts/python.exe` |
+| venv | `tools/windows-register/.venv` |
+| 输出 | `data/windows-register` |
 
-可用环境变量覆盖：
+### 安全
 
-- `GROK2API_REGISTER_ENGINE_PATH`
-- `GROK2API_WINDOWS_REGISTER_DIR`
-- `GROK2API_REGISTER_PYTHON`
-- `CLOAKBROWSER_EXECUTABLE_PATH`
-
-### 安全注意
-
-- `data/windows-register` 含真实账号凭据，勿上传到 Git 或共享盘。
-- 管理 API 日志已脱敏；仍不要把完整日志发到公开渠道。
-- 注册机会启动本机浏览器并访问上游站点，只在你有权操作的受控环境使用。
+- `data/windows-register` 含真实凭据，勿上传
+- 注册机仅管理员 API 可操作
+- 日志已脱敏；仍不要把完整日志发到公开渠道

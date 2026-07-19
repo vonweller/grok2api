@@ -33,6 +33,10 @@ $StdoutPath = Join-Path $LogsPath "grok2api.out.log"
 $StderrPath = Join-Path $LogsPath "grok2api.err.log"
 $TaskLogPath = Join-Path $LogsPath "grok2api-task.log"
 $CredentialsPath = Join-Path $Root "FIRST_RUN_CREDENTIALS.txt"
+$RegisterEnginePath = Join-Path $Root "tools\windows-register"
+$RegisterOutputPath = Join-Path $DataPath "windows-register"
+$RegisterPythonPath = Join-Path $RegisterEnginePath ".venv\Scripts\python.exe"
+$RegisterBrowserMarkerPath = Join-Path $RegisterEnginePath ".browser-path"
 $normalizedTaskRoot = $Root.TrimEnd("\").ToLowerInvariant()
 $taskHashProvider = [Security.Cryptography.SHA256]::Create()
 try {
@@ -312,11 +316,234 @@ function Protect-DeploymentDirectory {
     Set-DeploymentDirectoryAcl $DataPath ([Security.AccessControl.FileSystemRights]::Modify)
     Set-DeploymentDirectoryAcl $LogsPath ([Security.AccessControl.FileSystemRights]::Modify)
     Set-DeploymentDirectoryAcl $Root ([Security.AccessControl.FileSystemRights]::ReadAndExecute)
+    if (Test-Path -LiteralPath $RegisterOutputPath -PathType Container) {
+        Set-DeploymentDirectoryAcl $RegisterOutputPath ([Security.AccessControl.FileSystemRights]::Modify)
+    }
     Protect-SensitiveFile $ConfigPath -AllowLocalServiceRead
     if (Test-Path -LiteralPath $CredentialsPath -PathType Leaf) {
         Protect-SensitiveFile $CredentialsPath
     }
     Write-Step "Applied least-privilege ACLs: application files are read-only to LOCAL SERVICE; only data and logs are writable."
+}
+
+function Test-IsAdministratorAccount {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Resolve-HostPython {
+    $commands = @("python", "py")
+    foreach ($name in $commands) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue
+        if ($null -eq $command) {
+            continue
+        }
+        $source = [string]$command.Source
+        if ([string]::IsNullOrWhiteSpace($source)) {
+            continue
+        }
+        # Prefer real installs over WindowsApps stubs.
+        if ($source -match "(?i)\\WindowsApps\\") {
+            continue
+        }
+        return $source
+    }
+    $globs = @(
+        "C:\Python3*\python.exe",
+        "C:\Program Files\Python3*\python.exe",
+        "C:\Program Files\Python*\python.exe",
+        "G:\Python\python.exe"
+    )
+    foreach ($pattern in $globs) {
+        $hit = Get-Item -Path $pattern -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+        if ($null -ne $hit -and (Test-Path -LiteralPath $hit.FullName -PathType Leaf)) {
+            return $hit.FullName
+        }
+    }
+    return ""
+}
+
+function Get-RegisterBrowserPath {
+    if (Test-Path -LiteralPath $RegisterBrowserMarkerPath -PathType Leaf) {
+        $marked = ([System.IO.File]::ReadAllText($RegisterBrowserMarkerPath)).Trim().Trim('"')
+        if (-not [string]::IsNullOrWhiteSpace($marked) -and (Test-Path -LiteralPath $marked -PathType Leaf)) {
+            return $marked
+        }
+    }
+    $searchRoots = @(
+        (Join-Path $RegisterEnginePath ".cloakbrowser"),
+        (Join-Path $RegisterEnginePath "browser"),
+        (Join-Path $env:USERPROFILE ".cloakbrowser")
+    )
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $searchRoots += (Join-Path $env:LOCALAPPDATA "cloakbrowser")
+    }
+    $newest = $null
+    $newestTime = [DateTime]::MinValue
+    foreach ($root in $searchRoots) {
+        if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) {
+            continue
+        }
+        Get-ChildItem -LiteralPath $root -Recurse -Filter "chrome.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.LastWriteTimeUtc -gt $newestTime) {
+                $newest = $_.FullName
+                $newestTime = $_.LastWriteTimeUtc
+            }
+        }
+    }
+    if ($null -ne $newest) {
+        return $newest
+    }
+    return ""
+}
+
+function Test-WindowsRegisterRuntimeReady {
+    if (-not (Test-Path -LiteralPath (Join-Path $RegisterEnginePath "grok_register\register.py") -PathType Leaf)) {
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf)) {
+        return $false
+    }
+    $browser = Get-RegisterBrowserPath
+    if ([string]::IsNullOrWhiteSpace($browser)) {
+        return $false
+    }
+    try {
+        & $RegisterPythonPath -c "import importlib.util,sys; mods=('playwright','cloakbrowser'); sys.exit(0 if all(importlib.util.find_spec(m) for m in mods) else 1)"
+        return ($LASTEXITCODE -eq 0)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Ensure-WindowsRegisterRuntime {
+    param([switch]$Required)
+
+    if (-not (Test-Path -LiteralPath (Join-Path $RegisterEnginePath "grok_register\register.py") -PathType Leaf)) {
+        Write-WarningLine "Windows register engine is not packaged under tools\windows-register. Registration UI will stay unavailable."
+        if ($Required) {
+            throw "Windows register engine is missing from the package."
+        }
+        return
+    }
+
+    [System.IO.Directory]::CreateDirectory($RegisterOutputPath) | Out-Null
+
+    if (Test-WindowsRegisterRuntimeReady) {
+        $browser = Get-RegisterBrowserPath
+        if (-not [string]::IsNullOrWhiteSpace($browser)) {
+            $needsMarker = $true
+            if (Test-Path -LiteralPath $RegisterBrowserMarkerPath -PathType Leaf) {
+                $existing = ([System.IO.File]::ReadAllText($RegisterBrowserMarkerPath)).Trim().Trim('"')
+                if ($existing -eq $browser) {
+                    $needsMarker = $false
+                }
+            }
+            if ($needsMarker) {
+                try {
+                    [System.IO.File]::WriteAllText($RegisterBrowserMarkerPath, $browser + [Environment]::NewLine, [Text.Encoding]::UTF8)
+                }
+                catch {
+                    # LOCAL SERVICE / locked package trees may not allow rewriting the marker.
+                    Write-WarningLine ("Could not refresh .browser-path ({0}). Continuing with discovered browser path." -f $_.Exception.Message)
+                }
+            }
+        }
+        Write-Step "Windows register runtime is ready."
+        return
+    }
+
+    if (-not (Test-IsAdministratorAccount)) {
+        Write-WarningLine "Windows register runtime is incomplete and this process is not elevated. Registration may stay unavailable until an administrator runs deploy.bat install."
+        if ($Required) {
+            throw "Windows register runtime is not ready."
+        }
+        return
+    }
+
+    $hostPython = Resolve-HostPython
+    if ([string]::IsNullOrWhiteSpace($hostPython)) {
+        Write-WarningLine "Python 3.10+ was not found. Install Python and re-run deploy.bat install to enable the Windows registration worker. Core API features remain available."
+        if ($Required) {
+            throw "Python 3.10+ is required for the Windows registration worker."
+        }
+        return
+    }
+
+    Write-Step "Preparing Windows register runtime (Python + CloakBrowser)..."
+    $venvDir = Join-Path $RegisterEnginePath ".venv"
+    if (-not (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf)) {
+        Write-Step "Creating register virtualenv..."
+        & $hostPython -m venv $venvDir
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf)) {
+            throw "Failed to create tools\windows-register\.venv. Check the Python installation."
+        }
+    }
+
+    Write-Step "Installing register Python dependencies..."
+    & $RegisterPythonPath -m pip install --upgrade pip setuptools wheel
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to upgrade pip inside the register virtualenv."
+    }
+    $requirements = Join-Path $RegisterEnginePath "requirements.txt"
+    & $RegisterPythonPath -m pip install -r $requirements
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install tools\windows-register\requirements.txt."
+    }
+
+    # Install Chromium under the package tree so LOCAL SERVICE can read it.
+    $oldHome = $env:HOME
+    $oldUserProfile = $env:USERPROFILE
+    $oldLocalAppData = $env:LOCALAPPDATA
+    try {
+        $env:HOME = $RegisterEnginePath
+        $env:USERPROFILE = $RegisterEnginePath
+        $env:LOCALAPPDATA = Join-Path $RegisterEnginePath "AppData\Local"
+        [System.IO.Directory]::CreateDirectory($env:LOCALAPPDATA) | Out-Null
+        Write-Step "Installing CloakBrowser Chromium into the package..."
+        & $RegisterPythonPath -m cloakbrowser install
+        if ($LASTEXITCODE -ne 0) {
+            throw "CloakBrowser Chromium installation failed."
+        }
+        $browserFromPython = & $RegisterPythonPath -c "from grok_register.register import find_chrome; print(find_chrome())"
+        if ($LASTEXITCODE -ne 0) {
+            throw "CloakBrowser was installed but could not be resolved by the register engine."
+        }
+        $browserPath = ([string]$browserFromPython).Trim()
+        if ([string]::IsNullOrWhiteSpace($browserPath) -or -not (Test-Path -LiteralPath $browserPath -PathType Leaf)) {
+            $browserPath = Get-RegisterBrowserPath
+        }
+        if ([string]::IsNullOrWhiteSpace($browserPath) -or -not (Test-Path -LiteralPath $browserPath -PathType Leaf)) {
+            throw "CloakBrowser chrome.exe was not found after installation."
+        }
+        [System.IO.File]::WriteAllText($RegisterBrowserMarkerPath, $browserPath + [Environment]::NewLine, [Text.Encoding]::UTF8)
+    }
+    finally {
+        if ($null -eq $oldHome) { Remove-Item Env:HOME -ErrorAction SilentlyContinue } else { $env:HOME = $oldHome }
+        if ($null -eq $oldUserProfile) { Remove-Item Env:USERPROFILE -ErrorAction SilentlyContinue } else { $env:USERPROFILE = $oldUserProfile }
+        if ($null -eq $oldLocalAppData) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $oldLocalAppData }
+    }
+
+    if (-not (Test-WindowsRegisterRuntimeReady)) {
+        throw "Windows register runtime is still incomplete after setup."
+    }
+    Write-Step "Windows register runtime prepared."
+}
+
+function Set-WindowsRegisterProcessEnvironment {
+    if (Test-Path -LiteralPath $RegisterEnginePath -PathType Container) {
+        $env:GROK2API_REGISTER_ENGINE_PATH = $RegisterEnginePath
+    }
+    $env:GROK2API_WINDOWS_REGISTER_DIR = $RegisterOutputPath
+    if (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf) {
+        $env:GROK2API_REGISTER_PYTHON = $RegisterPythonPath
+    }
+    $browser = Get-RegisterBrowserPath
+    if (-not [string]::IsNullOrWhiteSpace($browser)) {
+        $env:CLOAKBROWSER_EXECUTABLE_PATH = $browser
+    }
 }
 
 function Assert-ExistingConfig {
@@ -568,6 +795,7 @@ function Start-ManagedProcess {
     Rotate-LogFile $StdoutPath
     Rotate-LogFile $StderrPath
     Rotate-LogFile $TaskLogPath
+    Set-WindowsRegisterProcessEnvironment
     $argumentLine = '--config "{0}" --listen "0.0.0.0:{1}"' -f $ConfigPath, $Value
     $process = Start-Process `
         -FilePath $ExecutablePath `
@@ -869,12 +1097,18 @@ try {
         "run-task" {
             Assert-DeploymentEnvironment
             Initialize-Config | Out-Null
+            # Do not bootstrap or rewrite package files under LOCAL SERVICE.
+            # deploy.bat install/start already prepared the register runtime as admin.
+            Set-WindowsRegisterProcessEnvironment
             $serviceExitCode = Start-ManagedProcess -Value $Port -Wait
             throw "Grok2API exited with code $serviceExitCode."
         }
         "run" {
             Assert-DeploymentEnvironment
             Initialize-Config | Out-Null
+            Ensure-WindowsRegisterRuntime
+            [System.IO.Directory]::CreateDirectory($RegisterOutputPath) | Out-Null
+            Set-WindowsRegisterProcessEnvironment
             Assert-PortAvailable $Port
             Save-Port $Port
             Write-Step "Running in this console on port $Port. Press Ctrl+C to stop."
@@ -887,21 +1121,32 @@ try {
             Assert-DeploymentEnvironment
             Assert-ServiceTaskInstalled
             Initialize-Config | Out-Null
+            Ensure-WindowsRegisterRuntime
+            Protect-DeploymentDirectory
             Start-Application $Port
         }
         "restart" {
             Assert-DeploymentEnvironment
             Assert-ServiceTaskInstalled
             Initialize-Config | Out-Null
+            Ensure-WindowsRegisterRuntime
+            Protect-DeploymentDirectory
             Stop-Application
             Start-Application $Port
         }
         "install" {
             Assert-DeploymentEnvironment
             Initialize-Config | Out-Null
+            Ensure-WindowsRegisterRuntime
             Stop-Application
             Install-ServiceTask $Port
             Start-Application $Port
+            if (Test-WindowsRegisterRuntimeReady) {
+                Write-Step "Windows registration worker is ready in the admin UI under Registration."
+            }
+            else {
+                Write-WarningLine "Core service started, but Windows registration runtime is not ready. Install Python 3.10+ and re-run deploy.bat install if you need the registration worker."
+            }
         }
     }
 }

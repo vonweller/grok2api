@@ -522,8 +522,11 @@ function Assert-NoPrivatePackageContent {
     param([string]$StagePath)
     foreach ($item in Get-ChildItem -LiteralPath $StagePath -Recurse -Force) {
         $relative = $item.FullName.Substring($StagePath.Length).TrimStart("\").Replace("\", "/")
-        if ($relative -match "(?i)(^|/)(config\.yaml|data|logs|node_modules|\.git|\.venv|keys)(/|$)") {
+        if ($relative -match "(?i)(^|/)(config\.yaml|data|logs|node_modules|\.git|\.venv|keys|AppData|\.cloakbrowser)(/|$)") {
             throw "Forbidden private/runtime content entered the package: $relative"
+        }
+        if (-not $item.PSIsContainer -and $item.Name -match "(?i)^(\.browser-path)$") {
+            throw "Forbidden private/runtime file entered the package: $relative"
         }
         $containsForbiddenEnvironmentFile = @($relative -split "/" | Where-Object {
             $_ -match "(?i)^\.env(?:\..*)?$" -and $_ -notmatch "(?i)^\.env\.example$"
@@ -552,14 +555,17 @@ function Copy-WindowsRegisterEngine {
         "logs",
         "__pycache__",
         ".pytest_cache",
-        ".git"
+        ".git",
+        "AppData",
+        ".cloakbrowser",
+        "browser"
     )
     Get-ChildItem -LiteralPath $SourceRoot -Force | ForEach-Object {
         $name = $_.Name
         if ($_.PSIsContainer -and ($excludeDirNames -contains $name)) {
             return
         }
-        if (-not $_.PSIsContainer -and $name -match "(?i)^(\.env)$") {
+        if (-not $_.PSIsContainer -and $name -match "(?i)^(\.env|\.browser-path)$") {
             return
         }
         $target = Join-Path $DestinationRoot $name
