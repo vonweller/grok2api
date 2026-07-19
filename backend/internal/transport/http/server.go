@@ -19,6 +19,7 @@ import (
 	modelapp "github.com/chenyme/grok2api/backend/internal/application/model"
 	settingsapp "github.com/chenyme/grok2api/backend/internal/application/settings"
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
+	windowsregisterapp "github.com/chenyme/grok2api/backend/internal/application/windowsregister"
 	accounthttp "github.com/chenyme/grok2api/backend/internal/transport/http/account"
 	adminauthhttp "github.com/chenyme/grok2api/backend/internal/transport/http/adminauth"
 	audithttp "github.com/chenyme/grok2api/backend/internal/transport/http/audit"
@@ -58,10 +59,11 @@ type Dependencies struct {
 	Dashboard    *dashboardapp.Service
 	Gateway      *gateway.Service
 	Media        *mediaapp.Service
-	Settings     *settingsapp.Service
-	Egress       *egressapp.Service
-	Updates      *updatecheckapp.Service
-}
+Settings         *settingsapp.Service
+		Egress           *egressapp.Service
+		Updates          *updatecheckapp.Service
+		WindowsRegister  *windowsregisterapp.Service
+	}
 
 type ReadinessComponent struct {
 	State  string `json:"state"`
@@ -141,7 +143,7 @@ func New(deps Dependencies) *gin.Engine {
 	adminProtected := adminRoot.Group("")
 	adminProtected.Use(middleware.AdminAuth(deps.AdminAuth))
 	authHandler.RegisterAuthenticated(adminProtected)
-	accounthttp.NewHandler(deps.Accounts, deps.AccountSync).Register(adminProtected)
+	accounthttp.NewHandler(deps.Accounts, deps.AccountSync, deps.WindowsRegister).Register(adminProtected)
 	modelhttp.NewHandler(deps.Models).Register(adminProtected)
 	clientkeyhttp.NewHandler(deps.ClientKeys).Register(adminProtected)
 	audithttp.NewHandler(deps.Audits).Register(adminProtected)

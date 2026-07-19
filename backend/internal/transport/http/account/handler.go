@@ -14,6 +14,7 @@ import (
 
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	accountsyncapp "github.com/chenyme/grok2api/backend/internal/application/accountsync"
+	windowsregisterapp "github.com/chenyme/grok2api/backend/internal/application/windowsregister"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
@@ -42,9 +43,10 @@ const (
 )
 
 type Handler struct {
-	service *accountapp.Service
-	sync    accountSynchronizer
-}
+		service         *accountapp.Service
+		sync            accountSynchronizer
+		windowsRegister *windowsregisterapp.Service
+	}
 
 type accountSyncPipeline struct {
 	ctx        context.Context
@@ -57,9 +59,13 @@ type accountSyncPipeline struct {
 	completed  atomic.Int64
 }
 
-func NewHandler(service *accountapp.Service, sync accountSynchronizer) *Handler {
-	return &Handler{service: service, sync: sync}
-}
+func NewHandler(service *accountapp.Service, sync accountSynchronizer, windowsRegister ...*windowsregisterapp.Service) *Handler {
+		handler := &Handler{service: service, sync: sync}
+		if len(windowsRegister) > 0 {
+			handler.windowsRegister = windowsRegister[0]
+		}
+		return handler
+	}
 
 func (h *Handler) startSyncPipeline(parent context.Context, progress func(completed, total int)) *accountSyncPipeline {
 	ctx, cancel := context.WithCancel(parent)
@@ -130,15 +136,19 @@ func (p *accountSyncPipeline) reportProgress() {
 }
 
 func (h *Handler) Register(router *gin.RouterGroup) {
-	router.GET("/accounts", h.list)
-	router.GET("/accounts/summary", h.summary)
-	router.GET("/accounts/export", h.exportCredentials)
-	router.GET("/accounts/:id", h.get)
-	router.POST("/accounts/device/start", h.startDevice)
-	router.POST("/accounts/device/:sessionId/poll", h.pollDevice)
-	router.POST("/accounts/import", h.importAuth)
-	router.POST("/accounts/web/import", h.importWebAuth)
-	router.POST("/accounts/console/import", h.importConsoleAuth)
+		router.GET("/accounts", h.list)
+		router.GET("/accounts/summary", h.summary)
+		router.GET("/accounts/export", h.exportCredentials)
+		router.GET("/accounts/windows-register/status", h.windowsRegisterStatus)
+		router.POST("/accounts/windows-register/start", h.windowsRegisterStart)
+		router.POST("/accounts/windows-register/stop", h.windowsRegisterStop)
+		router.POST("/accounts/windows-register/import", h.windowsRegisterImport)
+		router.GET("/accounts/:id", h.get)
+		router.POST("/accounts/device/start", h.startDevice)
+		router.POST("/accounts/device/:sessionId/poll", h.pollDevice)
+		router.POST("/accounts/import", h.importAuth)
+		router.POST("/accounts/web/import", h.importWebAuth)
+		router.POST("/accounts/console/import", h.importConsoleAuth)
 	router.POST("/accounts/web/convert-to-build", h.convertWebToBuild)
 	router.POST("/accounts/web/sync-to-console", h.syncWebToConsole)
 	router.POST("/accounts/web/run-scripts", h.runWebAccountScripts)

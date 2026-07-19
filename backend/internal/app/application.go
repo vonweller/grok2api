@@ -7,6 +7,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +27,7 @@ import (
 	quotarecoveryapp "github.com/chenyme/grok2api/backend/internal/application/quotarecovery"
 	settingsapp "github.com/chenyme/grok2api/backend/internal/application/settings"
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
+	windowsregisterapp "github.com/chenyme/grok2api/backend/internal/application/windowsregister"
 	"github.com/chenyme/grok2api/backend/internal/buildinfo"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
@@ -36,6 +41,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/runtime/memory"
 	redisruntime "github.com/chenyme/grok2api/backend/internal/infra/runtime/redis"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
+	windowsregisterinfra "github.com/chenyme/grok2api/backend/internal/infra/windowsregister"
 	"github.com/chenyme/grok2api/backend/internal/pkg/batch"
 	"github.com/chenyme/grok2api/backend/internal/pkg/reasoningreplay"
 	"github.com/chenyme/grok2api/backend/internal/repository"
@@ -45,26 +51,27 @@ import (
 
 // Application 管理后端进程生命周期和本地后台任务。
 type Application struct {
-	logger        *slog.Logger
-	database      *relational.Database
-	server        *http.Server
-	audits        *auditapp.Service
-	responses     repository.ResponseRepository
-	runtime       io.Closer
-	settingsBus   repository.SettingsChangeBus
-	settings      *settingsapp.Service
-	gateway       *gateway.Service
-	media         *mediaapp.Service
-	quotaRecovery *quotarecoveryapp.Service
-	accounts      *accountapp.Service
-	models        *modelapp.Service
-	clientKeys    *clientkeyapp.Service
-	updates       *updatecheckapp.Service
-	accountRepo   repository.AccountRepository
-	modelRepo     repository.ModelRepository
-	providers     *provider.Registry
-	web           *webprovider.Adapter
-	startup       *startupState
+	logger          *slog.Logger
+	database        *relational.Database
+	server          *http.Server
+	audits          *auditapp.Service
+	responses       repository.ResponseRepository
+	runtime         io.Closer
+	settingsBus     repository.SettingsChangeBus
+	settings        *settingsapp.Service
+	gateway         *gateway.Service
+	media           *mediaapp.Service
+	quotaRecovery   *quotarecoveryapp.Service
+	accounts        *accountapp.Service
+	models          *modelapp.Service
+	clientKeys      *clientkeyapp.Service
+	updates         *updatecheckapp.Service
+	windowsRegister *windowsregisterinfra.Service
+	accountRepo     repository.AccountRepository
+	modelRepo       repository.ModelRepository
+	providers       *provider.Registry
+	web             *webprovider.Adapter
+	startup         *startupState
 }
 
 // New 完成数据库、Provider、应用服务和 HTTP 路由装配。
@@ -297,20 +304,61 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		auditService.UpdateConfig(next.Audit.BatchSize, next.Audit.FlushInterval.Value())
 		clientKeyService.UpdateDefaults(next.ClientKeyDefaults.RPMLimit, next.ClientKeyDefaults.MaxConcurrent)
 	})
-	updateService := updatecheckapp.NewService(buildinfo.CurrentVersion(), nil)
+updateService := updatecheckapp.NewService(buildinfo.CurrentVersion(), nil)
+		windowsRegisterWorker := newWindowsRegisterWorker(cfg)
+		windowsRegisterService := windowsregisterapp.NewService(windowsRegisterWorker, accountService)
 
-	startup := newStartupState(len(windows))
-	readiness := func(readyCtx context.Context) httpserver.ReadinessSnapshot {
-		return readinessSnapshot(readyCtx, startup, runtimeHealth, modelRepo, accountRepo, providers)
+		startup := newStartupState(len(windows))
+		readiness := func(readyCtx context.Context) httpserver.ReadinessSnapshot {
+			return readinessSnapshot(readyCtx, startup, runtimeHealth, modelRepo, accountRepo, providers)
+		}
+		router := httpserver.New(httpserver.Dependencies{Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, Updates: updateService, WindowsRegister: windowsRegisterService})
+		server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
+		return &Application{
+			logger: logger, database: database, server: server,
+			audits: auditService, responses: responseRepo, runtime: runtimeStore,
+			settingsBus: settingsBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService,
+			windowsRegister: windowsRegisterWorker,
+			accountRepo: accountRepo, modelRepo: modelRepo, providers: providers, web: webAdapter, startup: startup,
+		}, nil
 	}
-	router := httpserver.New(httpserver.Dependencies{Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, Updates: updateService})
-	server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
-	return &Application{
-		logger: logger, database: database, server: server,
-		audits: auditService, responses: responseRepo, runtime: runtimeStore,
-		settingsBus: settingsBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService,
-		accountRepo: accountRepo, modelRepo: modelRepo, providers: providers, web: webAdapter, startup: startup,
-	}, nil
+
+func newWindowsRegisterWorker(cfg config.Config) *windowsregisterinfra.Service {
+	enginePath := strings.TrimSpace(cfg.WindowsRegister.EnginePath)
+	if enginePath == "" {
+		enginePath = "./tools/windows-register"
+	}
+	outputDir := strings.TrimSpace(cfg.WindowsRegister.OutputDir)
+	if outputDir == "" {
+		outputDir = "./data/windows-register"
+	}
+	if env := strings.TrimSpace(os.Getenv("GROK2API_REGISTER_ENGINE_PATH")); env != "" {
+		enginePath = env
+	}
+	if env := strings.TrimSpace(os.Getenv("GROK2API_WINDOWS_REGISTER_DIR")); env != "" {
+		outputDir = env
+	}
+	pythonPath := strings.TrimSpace(cfg.WindowsRegister.PythonPath)
+	if env := strings.TrimSpace(os.Getenv("GROK2API_REGISTER_PYTHON")); env != "" {
+		pythonPath = env
+	}
+	// Prefer absolute paths for process cwd/output stability.
+	if abs, err := filepath.Abs(enginePath); err == nil {
+		enginePath = abs
+	}
+	if abs, err := filepath.Abs(outputDir); err == nil {
+		outputDir = abs
+	}
+	enabled := cfg.WindowsRegister.Enabled
+	if runtime.GOOS != "windows" {
+		enabled = false
+	}
+	return windowsregisterinfra.NewService(windowsregisterinfra.Config{
+		Enabled:    enabled,
+		EnginePath: enginePath,
+		OutputDir:  outputDir,
+		PythonPath: pythonPath,
+	})
 }
 
 func maxBatchConcurrency(value config.BatchConfig) int {
@@ -475,12 +523,15 @@ func (a *Application) Run(ctx context.Context) error {
 }
 
 func (a *Application) Close() error {
-	var runtimeErr error
-	if a.runtime != nil {
-		runtimeErr = a.runtime.Close()
+		if a.windowsRegister != nil {
+			a.windowsRegister.Close()
+		}
+		var runtimeErr error
+		if a.runtime != nil {
+			runtimeErr = a.runtime.Close()
+		}
+		return errors.Join(runtimeErr, a.database.Close())
 	}
-	return errors.Join(runtimeErr, a.database.Close())
-}
 
 func (a *Application) runPeriodicTask(ctx context.Context, interval time.Duration, name string, task func(context.Context) error) {
 	timer := time.NewTimer(interval)

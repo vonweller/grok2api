@@ -91,7 +91,6 @@ func TestStartRejectsWhenRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	block := make(chan struct{})
-	var current *fakeProcess
 	svc := windowsregister.NewService(windowsregister.Config{
 		Enabled:    true,
 		EnginePath: engine,
@@ -101,15 +100,7 @@ func TestStartRejectsWhenRunning(t *testing.T) {
 	svc.SetPlatformSupported(true)
 	svc.SetProcessFactory(func(ctx context.Context, name string, arg ...string) (windowsregister.Process, error) {
 		p := newFakeProcess(nil, 0)
-		current = p
-		// keep running until killed/closed externally by not closing writer until KillTree
-		p.lines = nil
-		go func() {
-			<-block
-			_ = p.writer.Close()
-			close(p.done)
-		}()
-		// override Start to not auto-close
+		// override Start to not auto-close; stop via block/KillTree
 		return &blockingProcess{fakeProcess: p, block: block}, nil
 	})
 	// readiness: engine present + python path set is enough when probes disabled
@@ -123,7 +114,6 @@ func TestStartRejectsWhenRunning(t *testing.T) {
 		t.Fatalf("expected already running, got %v", err)
 	}
 	close(block)
-	_ = current
 	_, _ = svc.Stop(context.Background())
 }
 
