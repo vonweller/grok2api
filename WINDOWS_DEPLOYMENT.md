@@ -116,3 +116,43 @@ deploy.bat stop
 - 只开放确实需要的 Windows 防火墙端口，并限制管理端来源。
 - 定期备份 `config.yaml`、数据库与媒体目录。
 - `FIRST_RUN_CREDENTIALS.txt` 在修改首次密码后应立即删除。
+
+## Windows 浏览器注册机（可选）
+
+发布包会附带 `tools/windows-register` 引擎源码，但**不会**捆绑 Python 运行时、`.venv` 或浏览器。注册机会由 Go 后端作为子进程管理，仅管理员可在 WebUI 中操作。
+
+### 首次准备
+
+1. 在目标 Windows 机器安装 Python 3.10+（可加入 PATH，或稍后配置 `pythonPath`）。
+2. 在部署目录打开 PowerShell：
+
+```powershell
+cd tools\windows-register
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -SmokeTest
+```
+
+3. 启动/重启 grok2api。
+4. 登录管理后台 → **注册** 页面 → **Windows 浏览器注册机**。
+5. 确认状态显示“运行环境就绪”后，设置目标数量并开始注册。
+6. 注册完成后点击“导入本次结果”或“导入全部结果”，写入 Web / Console 账号池。
+
+### 运行时路径
+
+| 用途 | 默认路径 |
+| --- | --- |
+| 引擎 | `tools/windows-register` |
+| 输出 | `data/windows-register/accounts.txt` |
+| 推荐 venv | `tools/windows-register/.venv/Scripts/python.exe` |
+
+可用环境变量覆盖：
+
+- `GROK2API_REGISTER_ENGINE_PATH`
+- `GROK2API_WINDOWS_REGISTER_DIR`
+- `GROK2API_REGISTER_PYTHON`
+- `CLOAKBROWSER_EXECUTABLE_PATH`
+
+### 安全注意
+
+- `data/windows-register` 含真实账号凭据，勿上传到 Git 或共享盘。
+- 管理 API 日志已脱敏；仍不要把完整日志发到公开渠道。
+- 注册机会启动本机浏览器并访问上游站点，只在你有权操作的受控环境使用。

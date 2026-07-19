@@ -73,6 +73,16 @@ media:
     # [按需修改] 图片二进制目录；数据库只保存资源元数据。
     path: "./data/media"
 
+windowsRegister:
+  # [按需修改] 仅 Windows 生效；其他平台强制不可用。
+  enabled: true
+  # [通常不要修改] 注册引擎源码目录（随发布包分发，不含 .venv）。
+  enginePath: "./tools/windows-register"
+  # [通常不要修改] 注册结果输出目录；含敏感凭据，勿上传。
+  outputDir: "./data/windows-register"
+  # [按需修改] 空=自动探测：GROK2API_REGISTER_PYTHON > 引擎 .venv > py/python。
+  pythonPath: ""
+
 routing:
   # [按需修改] 服务端推理回放缓存：多轮时自动补回客户端未携带的 encrypted_content。
   reasoningReplayEnabled: true

@@ -54,7 +54,8 @@ Grok2API is a Go-based Grok API gateway with a built-in React admin console. It 
 - **Media pipeline**: image generation, image editing, video jobs, local archiving, and URL/Base64/SSE output
 - **Account relationships**: Web-centered links to Build and Console can share a stable egress identity while runtime state stays independent
 - **Runtime infrastructure**: SQLite/PostgreSQL, Memory/Redis, and HTTP/SOCKS5/Resin egress
-- **Admin console**: dashboard, accounts, model routes, client keys, image gallery, video library, request audits, runtime settings, and update checks
+- **Admin console**: dashboard, accounts, registration, model routes, client keys, image gallery, video library, request audits, runtime settings, and update checks
+- **Windows registration worker** (optional): manage a local CloakBrowser registration engine from the admin UI and import results into Web/Console pools
 
 ## Architecture
 
@@ -194,7 +195,7 @@ package.bat
 
 The script checks the build environment, installs checksum-verified portable tools under `.tools` when needed, runs verification and builds, then creates `windows/amd64` and `windows/arm64` ZIP files plus checksums under `release/`. Private `config.yaml`, databases, media, and logs are never included.
 
-Upload and extract the ZIP matching the server architecture onto a local NTFS drive, then double-click `deploy.bat`. It creates secure first-run configuration, registers an at-boot task, and starts the application. See the [Windows deployment guide](./WINDOWS_DEPLOYMENT.md) for maintenance, upgrades, and backups.
+Upload and extract the ZIP matching the server architecture onto a local NTFS drive, then double-click `deploy.bat`. It creates secure first-run configuration, registers an at-boot task, and starts the application. See the [Windows deployment guide](./WINDOWS_DEPLOYMENT.md) for maintenance, upgrades, backups, and the optional Windows browser registration worker (`tools/windows-register`).
 
 ### Run from source
 
