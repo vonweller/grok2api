@@ -46,13 +46,20 @@ func resolvePython(configured, enginePath string) string {
 	return ""
 }
 
-func resolveBrowserPath() string {
+func resolveBrowserPath(enginePath string) string {
 	for _, key := range []string{"CLOAKBROWSER_EXECUTABLE_PATH", "XAI_ENROLLER_BROWSER_EXECUTABLE"} {
 		if value := strings.TrimSpace(strings.Trim(os.Getenv(key), `"`)); value != "" {
 			value = os.ExpandEnv(value)
 			if fileExists(value) {
 				return value
 			}
+		}
+	}
+	// setup.ps1 can pin the discovered browser for service accounts that do not
+	// share the interactive user's profile paths.
+	if enginePath != "" {
+		if marker := strings.TrimSpace(readFirstLine(filepath.Join(enginePath, ".browser-path"))); marker != "" && fileExists(marker) {
+			return marker
 		}
 	}
 	var roots []string
@@ -62,9 +69,21 @@ func resolveBrowserPath() string {
 	if local := os.Getenv("LOCALAPPDATA"); local != "" {
 		roots = append(roots, filepath.Join(local, "cloakbrowser"))
 	}
+	// LOCAL SERVICE / other service accounts cannot see the interactive user's
+	// profile through UserHomeDir. Scan common Windows profile locations.
+	roots = append(roots, discoverCloakBrowserRoots()...)
 	var newest string
 	var newestMod int64
+	seen := make(map[string]struct{})
 	for _, root := range roots {
+		root = filepath.Clean(root)
+		if root == "" {
+			continue
+		}
+		if _, ok := seen[strings.ToLower(root)]; ok {
+			continue
+		}
+		seen[strings.ToLower(root)] = struct{}{}
 		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil || d == nil || d.IsDir() {
 				return nil
@@ -86,6 +105,41 @@ func resolveBrowserPath() string {
 		})
 	}
 	return newest
+}
+
+func discoverCloakBrowserRoots() []string {
+	roots := make([]string, 0, 8)
+	// Typical interactive installs.
+	if entries, err := os.ReadDir(`C:\Users`); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			// skip system profile dirs
+			lower := strings.ToLower(name)
+			if lower == "public" || lower == "default" || lower == "default user" || lower == "all users" {
+				continue
+			}
+			roots = append(roots,
+				filepath.Join(`C:\Users`, name, ".cloakbrowser"),
+				filepath.Join(`C:\Users`, name, "AppData", "Local", "cloakbrowser"),
+			)
+		}
+	}
+	return roots
+}
+
+func readFirstLine(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(raw))
+	if idx := strings.IndexAny(line, "\r\n"); idx >= 0 {
+		line = strings.TrimSpace(line[:idx])
+	}
+	return strings.Trim(line, `"'`)
 }
 
 func enginePresent(enginePath string) bool {

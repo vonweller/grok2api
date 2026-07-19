@@ -444,7 +444,7 @@ func (s *Service) statusLocked() Status {
 		PlatformSupported: supported,
 		Ready:             ready,
 		Missing:           missing,
-		BrowserInstalled:  resolveBrowserPath() != "" || s.skipProbes,
+		BrowserInstalled:  resolveBrowserPath(s.cfg.EnginePath) != "" || s.skipProbes,
 		State:             s.state,
 		Running:           running,
 		Target:            s.target,
@@ -488,7 +488,7 @@ func (s *Service) readinessLocked() (bool, []string, string) {
 	if python == "" {
 		missing = append(missing, "python")
 	}
-	browser := resolveBrowserPath()
+	browser := resolveBrowserPath(s.cfg.EnginePath)
 	if !s.skipProbes {
 		if browser == "" {
 			missing = append(missing, "browser")

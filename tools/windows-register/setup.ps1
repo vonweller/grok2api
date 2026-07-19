@@ -37,14 +37,26 @@ if (-not $SkipBrowserInstall) {
 New-Item -ItemType Directory -Force -Path "keys", "logs" | Out-Null
 
 Write-Host "[4/4] Checking the runtime..."
-& $venvPython -c "from grok_register.register import find_chrome; print(find_chrome())"
-if ($LASTEXITCODE -ne 0) {
+$browserPath = & $venvPython -c "from grok_register.register import find_chrome; print(find_chrome())"
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($browserPath)) {
     throw "CloakBrowser was not found. Run setup.ps1 without -SkipBrowserInstall."
 }
+$browserPath = $browserPath.Trim()
+Write-Host $browserPath
+# Persist for service accounts (e.g. LOCAL SERVICE) that cannot see the interactive profile.
+$markerPath = Join-Path $PSScriptRoot ".browser-path"
+[System.IO.File]::WriteAllText($markerPath, $browserPath + [Environment]::NewLine, [Text.Encoding]::UTF8)
+$env:CLOAKBROWSER_EXECUTABLE_PATH = $browserPath
 
 if ($SmokeTest) {
-    & $venvPython scripts\windows_browser_smoke.py
-    if ($LASTEXITCODE -ne 0) { throw "Browser smoke test failed." }
+    $smoke = Join-Path $PSScriptRoot "scripts\windows_browser_smoke.py"
+    if (Test-Path -LiteralPath $smoke) {
+        & $venvPython $smoke
+        if ($LASTEXITCODE -ne 0) { throw "Browser smoke test failed." }
+    } else {
+        Write-Host "Smoke script missing; skipped browser smoke test."
+    }
 }
 
 Write-Host "Windows setup completed."
+Write-Host "Browser path saved to .browser-path for managed service startup."
