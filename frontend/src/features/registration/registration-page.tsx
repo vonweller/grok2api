@@ -1,14 +1,16 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, CheckCircle2, ClipboardPaste, Compass, ExternalLink, FileUp, FolderOpen, KeyRound, ShieldCheck, SquareTerminal, TriangleAlert, UserPlus, Webhook, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowRight, CheckCircle2, ClipboardPaste, Compass, ExternalLink, FileUp, FolderOpen, KeyRound, MonitorPlay, ShieldCheck, SquareTerminal, TriangleAlert, UserPlus, Webhook, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError } from "@/shared/api/client";
@@ -27,6 +29,14 @@ import {
   type DeviceSessionDTO,
 } from "@/features/accounts/accounts-api";
 import { parseSSOCredentialFiles, parseSSOCredentialText, SSOCredentialParseError, type ParsedSSOCredentials } from "@/features/registration/credential-parser";
+import {
+  getWindowsRegisterStatus,
+  importWindowsRegister,
+  startWindowsRegister,
+  stopWindowsRegister,
+  type WindowsRegisterImportResultDTO,
+  type WindowsRegisterStatusDTO,
+} from "@/features/registration/windows-register-api";
 
 const OFFICIAL_ACCOUNT_URL = "https://accounts.x.ai/";
 
@@ -67,12 +77,70 @@ export function RegistrationPage() {
   const [importSummaries, setImportSummaries] = useState<ImportSummary[]>([]);
   const [importCancelled, setImportCancelled] = useState(false);
   const [registrationOutput, setRegistrationOutput] = useState<RegistrationOutputSelection | null>(null);
+  const [registerTarget, setRegisterTarget] = useState(1);
+  const [registerEmailMode, setRegisterEmailMode] = useState<"tempmail" | "custom">("tempmail");
+  const [registerEmailApi, setRegisterEmailApi] = useState("http://127.0.0.1:8080");
+  const [registerEmailDomain, setRegisterEmailDomain] = useState("");
+  const [registerProxy, setRegisterProxy] = useState("");
+  const [registerMaxMem, setRegisterMaxMem] = useState("");
+  const [registerDebug, setRegisterDebug] = useState(false);
+  const [registerImportResult, setRegisterImportResult] = useState<WindowsRegisterImportResultDTO | null>(null);
+  const logEndRef = useRef<HTMLDivElement>(null);
 
   const invalidateAccountData = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["accounts"] });
     void queryClient.invalidateQueries({ queryKey: ["models"] });
     void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
   }, [queryClient]);
+
+  const windowsRegisterQuery = useQuery({
+    queryKey: ["windows-register-status"],
+    queryFn: getWindowsRegisterStatus,
+    refetchInterval: (query) => {
+      const state = query.state.data?.state;
+      return state === "running" || state === "starting" || state === "stopping" ? 1500 : false;
+    },
+  });
+  const windowsStatus: WindowsRegisterStatusDTO | undefined = windowsRegisterQuery.data;
+  const windowsBusy = windowsStatus?.running || windowsStatus?.state === "starting" || windowsStatus?.state === "stopping";
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [windowsStatus?.logs]);
+
+  const startRegisterMutation = useMutation({
+    mutationFn: startWindowsRegister,
+    onSuccess: (status) => {
+      queryClient.setQueryData(["windows-register-status"], status);
+      toast.success(t("registration.windows.started"));
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : t("errors.generic")),
+  });
+  const stopRegisterMutation = useMutation({
+    mutationFn: stopWindowsRegister,
+    onSuccess: (status) => {
+      queryClient.setQueryData(["windows-register-status"], status);
+      toast.success(t("registration.windows.stopped"));
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : t("errors.generic")),
+  });
+  const importRegisterMutation = useMutation({
+    mutationFn: importWindowsRegister,
+    onSuccess: (result) => {
+      setRegisterImportResult(result);
+      invalidateAccountData();
+      const failed = result.results.filter((item) => item.error).length;
+      if (failed > 0) toast.warning(t("registration.windows.importPartial", { failed, total: result.results.length }));
+      else toast.success(t("registration.windows.importCompleted", { count: result.sourceCount }));
+      void windowsRegisterQuery.refetch();
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : t("errors.generic")),
+  });
+
+  const missingLabels = useMemo(() => {
+    if (!windowsStatus?.missing?.length) return [];
+    return windowsStatus.missing.map((item) => t(`registration.windows.missing.${item}`, { defaultValue: item }));
+  }, [t, windowsStatus?.missing]);
 
   useEffect(() => () => {
     importAbortRef.current?.abort();
@@ -339,6 +407,191 @@ export function RegistrationPage() {
           <p className="text-xs leading-5 text-muted-foreground">{t("registration.safetyDescription")}</p>
         </div>
       </section>
+
+      <WorkflowPanel
+        step="W"
+        icon={<MonitorPlay className="size-4" />}
+        title={t("registration.windows.title")}
+        description={t("registration.windows.description")}
+      >
+        {windowsRegisterQuery.isLoading ? (
+          <div className="flex min-h-9 items-center gap-2 text-xs text-muted-foreground"><Spinner />{t("common.loading")}</div>
+        ) : null}
+        {windowsRegisterQuery.isError ? (
+          <p className="flex items-center gap-2 text-xs text-destructive" role="alert">
+            <TriangleAlert className="size-4" />
+            {windowsRegisterQuery.error instanceof Error ? windowsRegisterQuery.error.message : t("errors.generic")}
+          </p>
+        ) : null}
+        {windowsStatus ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge variant={windowsStatus.platformSupported ? "secondary" : "destructive"}>
+                {windowsStatus.platformSupported ? t("registration.windows.platformOk") : t("registration.windows.platformUnsupported")}
+              </Badge>
+              <Badge variant={windowsStatus.ready ? "secondary" : "outline"}>
+                {windowsStatus.ready ? t("registration.windows.ready") : t("registration.windows.notReady")}
+              </Badge>
+              <Badge variant="outline">{t(`registration.windows.state.${windowsStatus.state}`, { defaultValue: windowsStatus.state })}</Badge>
+              {windowsStatus.lastError ? <span className="text-destructive">{windowsStatus.lastError}</span> : null}
+            </div>
+            {!windowsStatus.ready && missingLabels.length > 0 ? (
+              <p className="text-[11px] leading-5 text-muted-foreground">{t("registration.windows.missingList", { items: missingLabels.join(", ") })}</p>
+            ) : null}
+
+            {windowsStatus.platformSupported ? (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="windows-register-target">{t("registration.windows.target")}</Label>
+                    <Input
+                      id="windows-register-target"
+                      type="number"
+                      min={1}
+                      max={10000}
+                      value={registerTarget}
+                      disabled={Boolean(windowsBusy) || startRegisterMutation.isPending}
+                      onChange={(event) => setRegisterTarget(Math.max(1, Number(event.target.value) || 1))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>{t("registration.windows.emailMode")}</Label>
+                    <Tabs
+                      value={registerEmailMode}
+                      onValueChange={(value) => setRegisterEmailMode(value as "tempmail" | "custom")}
+                    >
+                      <TabsList className="grid h-9 w-full grid-cols-2">
+                        <TabsTrigger value="tempmail" disabled={Boolean(windowsBusy)}>{t("registration.windows.tempmail")}</TabsTrigger>
+                        <TabsTrigger value="custom" disabled={Boolean(windowsBusy)}>{t("registration.windows.custom")}</TabsTrigger>
+                      </TabsList>
+                    </Tabs>
+                  </div>
+                  {registerEmailMode === "custom" ? (
+                    <>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="windows-register-email-api">{t("registration.windows.emailApi")}</Label>
+                        <Input id="windows-register-email-api" value={registerEmailApi} disabled={Boolean(windowsBusy)} onChange={(event) => setRegisterEmailApi(event.target.value)} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="windows-register-email-domain">{t("registration.windows.emailDomain")}</Label>
+                        <Input id="windows-register-email-domain" value={registerEmailDomain} disabled={Boolean(windowsBusy)} onChange={(event) => setRegisterEmailDomain(event.target.value)} />
+                      </div>
+                    </>
+                  ) : null}
+                  <div className="space-y-1.5">
+                    <Label htmlFor="windows-register-proxy">{t("registration.windows.proxy")}</Label>
+                    <Input id="windows-register-proxy" value={registerProxy} placeholder="http://127.0.0.1:7890" disabled={Boolean(windowsBusy)} onChange={(event) => setRegisterProxy(event.target.value)} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="windows-register-max-mem">{t("registration.windows.maxMem")}</Label>
+                    <Input id="windows-register-max-mem" value={registerMaxMem} placeholder="4G" disabled={Boolean(windowsBusy)} onChange={(event) => setRegisterMaxMem(event.target.value)} />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                  <div className="space-y-0.5">
+                    <p className="text-xs font-medium">{t("registration.windows.debug")}</p>
+                    <p className="text-[11px] text-muted-foreground">{t("registration.windows.debugHelp")}</p>
+                  </div>
+                  <Switch checked={registerDebug} disabled={Boolean(windowsBusy)} onCheckedChange={setRegisterDebug} />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!windowsStatus.ready || Boolean(windowsBusy) || startRegisterMutation.isPending}
+                    onClick={() => startRegisterMutation.mutate({
+                      target: registerTarget,
+                      emailMode: registerEmailMode,
+                      emailApi: registerEmailMode === "custom" ? registerEmailApi : undefined,
+                      emailDomain: registerEmailMode === "custom" ? registerEmailDomain : undefined,
+                      proxy: registerProxy || undefined,
+                      maxMem: registerMaxMem || undefined,
+                      debug: registerDebug,
+                    })}
+                  >
+                    {startRegisterMutation.isPending ? <Spinner /> : <MonitorPlay />}
+                    {t("registration.windows.start")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={!windowsBusy || stopRegisterMutation.isPending}
+                    onClick={() => stopRegisterMutation.mutate()}
+                  >
+                    {stopRegisterMutation.isPending ? <Spinner /> : <X />}
+                    {t("registration.windows.stop")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={!windowsStatus.canImportCurrent || importRegisterMutation.isPending}
+                    onClick={() => importRegisterMutation.mutate({ scope: "current" })}
+                  >
+                    {importRegisterMutation.isPending ? <Spinner /> : <FileUp />}
+                    {t("registration.windows.importCurrent")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={!windowsStatus.canImportAll || importRegisterMutation.isPending}
+                    onClick={() => importRegisterMutation.mutate({ scope: "all" })}
+                  >
+                    {importRegisterMutation.isPending ? <Spinner /> : <FileUp />}
+                    {t("registration.windows.importAll")}
+                  </Button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-4">
+                  <MetricCard label={t("registration.windows.success")} value={windowsStatus.success} />
+                  <MetricCard label={t("registration.windows.failed")} value={windowsStatus.failed} />
+                  <MetricCard label={t("registration.windows.rateLimited")} value={windowsStatus.rateLimited} />
+                  <MetricCard label={t("registration.windows.percent")} value={`${windowsStatus.percent}%`} />
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span>{t("registration.windows.logs")}</span>
+                    <span>{t("registration.windows.elapsed", { seconds: windowsStatus.elapsedSec })}</span>
+                  </div>
+                  <div className="max-h-48 overflow-auto rounded-md border bg-muted/30 p-3 font-mono text-[11px] leading-5">
+                    {(windowsStatus.logs ?? []).length === 0 ? (
+                      <p className="text-muted-foreground">{t("registration.windows.logsEmpty")}</p>
+                    ) : (
+                      windowsStatus.logs.map((line, index) => <div key={`${index}-${line.slice(0, 24)}`}>{line}</div>)
+                    )}
+                    <div ref={logEndRef} />
+                  </div>
+                </div>
+                {registerImportResult ? (
+                  <div className="grid gap-2 sm:grid-cols-2" aria-live="polite">
+                    {registerImportResult.results.map((item) => (
+                      <div key={item.provider} className="rounded-md border p-3 text-xs">
+                        <div className="mb-1.5 flex items-center justify-between gap-2">
+                          <span className="font-medium">{item.provider}</span>
+                          {item.error ? <TriangleAlert className="size-4 text-amber-500" /> : <CheckCircle2 className="size-4 text-emerald-600" />}
+                        </div>
+                        <p className="leading-5 text-muted-foreground">
+                          {item.error
+                            ? item.error
+                            : t("registration.importResult", {
+                              created: item.created,
+                              updated: item.updated,
+                              synced: 0,
+                              syncFailed: 0,
+                            })}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <p className="text-xs leading-5 text-muted-foreground">{t("registration.windows.unsupportedHelp")}</p>
+            )}
+          </div>
+        ) : null}
+      </WorkflowPanel>
 
       <div className="grid items-start gap-3 lg:grid-cols-2">
         <WorkflowPanel
@@ -614,5 +867,14 @@ function WorkflowPanel({ step, icon, title, description, children }: { step: str
       </header>
       <div className="space-y-3">{children}</div>
     </section>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-md border p-3">
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
+    </div>
   );
 }
