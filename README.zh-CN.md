@@ -183,6 +183,20 @@ docker compose restart grok2api
 docker compose down
 ```
 
+### Windows 一键打包与部署
+
+Windows 发布包是包含后端、前端和时区数据的自包含程序，服务器无需安装 Go、Node.js、pnpm、SQLite 或 VC++ 运行库。
+
+在开发机的仓库根目录运行：
+
+```bat
+package.bat
+```
+
+脚本会检测构建环境，在缺少工具时将从官方发布源下载且经过 SHA-256/SHA-512 校验的便携工具安装到仓库 `.tools` 目录，然后执行检查、构建并在 `release/` 中生成 `windows/amd64`、`windows/arm64` ZIP 与校验文件。发布包不会包含真实 `config.yaml`、数据库、媒体或日志。
+
+将匹配服务器架构的 ZIP 上传并解压到本地 NTFS 磁盘，双击其中的 `deploy.bat`。它会生成首次安全配置、注册开机启动任务并启动服务。详细命令、升级和备份要求见 [Windows 部署说明](./WINDOWS_DEPLOYMENT.md)。
+
 ### 源码运行
 
 ```bash

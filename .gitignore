@@ -42,5 +42,6 @@ Thumbs.db
 
 # Temporary files
 /release/
+/.tools/
 /.tmp/
 /tmp/

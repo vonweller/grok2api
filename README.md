@@ -182,6 +182,20 @@ docker compose restart grok2api
 docker compose down
 ```
 
+### One-click Windows package and deployment
+
+The native Windows release is self-contained and includes the backend, built frontend, and timezone database. The server does not need Go, Node.js, pnpm, SQLite, or a VC++ runtime.
+
+Run this from the repository root on the build machine:
+
+```bat
+package.bat
+```
+
+The script checks the build environment, installs checksum-verified portable tools under `.tools` when needed, runs verification and builds, then creates `windows/amd64` and `windows/arm64` ZIP files plus checksums under `release/`. Private `config.yaml`, databases, media, and logs are never included.
+
+Upload and extract the ZIP matching the server architecture onto a local NTFS drive, then double-click `deploy.bat`. It creates secure first-run configuration, registers an at-boot task, and starts the application. See the [Windows deployment guide](./WINDOWS_DEPLOYMENT.md) for maintenance, upgrades, and backups.
+
 ### Run from source
 
 ```bash
