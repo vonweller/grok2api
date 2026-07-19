@@ -522,7 +522,13 @@ function Assert-NoPrivatePackageContent {
     param([string]$StagePath)
     foreach ($item in Get-ChildItem -LiteralPath $StagePath -Recurse -Force) {
         $relative = $item.FullName.Substring($StagePath.Length).TrimStart("\").Replace("\", "/")
-        if ($relative -match "(?i)(^|/)(config\.yaml|data|logs|node_modules|\.git|\.venv|keys|\.env(?:\..*)?)(/|$)") {
+        if ($relative -match "(?i)(^|/)(config\.yaml|data|logs|node_modules|\.git|\.venv|keys)(/|$)") {
+            throw "Forbidden private/runtime content entered the package: $relative"
+        }
+        $containsForbiddenEnvironmentFile = @($relative -split "/" | Where-Object {
+            $_ -match "(?i)^\.env(?:\..*)?$" -and $_ -notmatch "(?i)^\.env\.example$"
+        }).Count -gt 0
+        if ($containsForbiddenEnvironmentFile) {
             throw "Forbidden private/runtime content entered the package: $relative"
         }
         if (-not $item.PSIsContainer -and $item.Name -match "(?i)(\.(db|sqlite|sqlite3|log|pem|pfx|p12|key|map|pyc)|-wal|-shm)$") {
