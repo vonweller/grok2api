@@ -44,14 +44,16 @@ export type WindowsRegisterStartInput = {
 
 export type WindowsRegisterImportInput = {
   scope: "current" | "all";
-  destinations?: Array<"grok_web" | "grok_console">;
+  destinations?: Array<"grok_web" | "grok_console" | "grok_build">;
 };
 
 export type WindowsRegisterProviderImportDTO = {
   provider: string;
   created: number;
   updated: number;
+  linked?: number;
   skipped: number;
+  failed?: number;
   error?: string;
 };
 
@@ -105,7 +107,9 @@ const decodeImportResult = createValidatedDecoder<WindowsRegisterImportResultDTO
     provider: isString,
     created: isNumber,
     updated: isNumber,
+    linked: isOptional(isNumber),
     skipped: isNumber,
+    failed: isOptional(isNumber),
     error: isOptional(isString),
   })),
 }));

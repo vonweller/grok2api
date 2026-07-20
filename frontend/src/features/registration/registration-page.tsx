@@ -527,7 +527,7 @@ export function RegistrationPage() {
                     variant="secondary"
                     size="sm"
                     disabled={!windowsStatus.canImportCurrent || importRegisterMutation.isPending}
-                    onClick={() => importRegisterMutation.mutate({ scope: "current" })}
+                    onClick={() => importRegisterMutation.mutate({ scope: "current", destinations: ["grok_web", "grok_console", "grok_build"] })}
                   >
                     {importRegisterMutation.isPending ? <Spinner /> : <FileUp />}
                     {t("registration.windows.importCurrent")}
@@ -537,7 +537,7 @@ export function RegistrationPage() {
                     variant="secondary"
                     size="sm"
                     disabled={!windowsStatus.canImportAll || importRegisterMutation.isPending}
-                    onClick={() => importRegisterMutation.mutate({ scope: "all" })}
+                    onClick={() => importRegisterMutation.mutate({ scope: "all", destinations: ["grok_web", "grok_console", "grok_build"] })}
                   >
                     {importRegisterMutation.isPending ? <Spinner /> : <FileUp />}
                     {t("registration.windows.importAll")}
@@ -568,18 +568,25 @@ export function RegistrationPage() {
                     {registerImportResult.results.map((item) => (
                       <div key={item.provider} className="rounded-md border p-3 text-xs">
                         <div className="mb-1.5 flex items-center justify-between gap-2">
-                          <span className="font-medium">{item.provider}</span>
+                          <span className="font-medium">{item.provider === "grok_web" ? "Grok Web" : item.provider === "grok_console" ? "Grok Console" : "Grok Build"}</span>
                           {item.error ? <TriangleAlert className="size-4 text-amber-500" /> : <CheckCircle2 className="size-4 text-emerald-600" />}
                         </div>
                         <p className="leading-5 text-muted-foreground">
                           {item.error
                             ? item.error
-                            : t("registration.importResult", {
-                              created: item.created,
-                              updated: item.updated,
-                              synced: 0,
-                              syncFailed: 0,
-                            })}
+                            : item.provider === "grok_build"
+                              ? t("registration.windows.buildResult", {
+                                created: item.created,
+                                linked: item.linked ?? 0,
+                                skipped: item.skipped,
+                                failed: item.failed ?? 0,
+                              })
+                              : t("registration.importResult", {
+                                created: item.created,
+                                updated: item.updated,
+                                synced: 0,
+                                syncFailed: 0,
+                              })}
                         </p>
                       </div>
                     ))}

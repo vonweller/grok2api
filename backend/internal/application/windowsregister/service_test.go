@@ -35,9 +35,12 @@ func (f *fakeWorker) ImportTokens(scope string) ([]string, error) {
 type fakeImporter struct {
 	webCalls     int
 	consoleCalls int
+	buildCalls   int
 	webErr       error
 	consoleErr   error
+	buildErr     error
 	lastPayload  string
+	buildIDs     []uint64
 }
 
 func (f *fakeImporter) ImportWebCredentials(ctx context.Context, data []byte) (accountapp.ImportResult, error) {
@@ -46,7 +49,7 @@ func (f *fakeImporter) ImportWebCredentials(ctx context.Context, data []byte) (a
 	if f.webErr != nil {
 		return accountapp.ImportResult{}, f.webErr
 	}
-	return accountapp.ImportResult{Created: 2, Updated: 0, Skipped: 1}, nil
+	return accountapp.ImportResult{Created: 2, Updated: 0, Skipped: 1, AccountIDs: []uint64{11, 12}}, nil
 }
 
 func (f *fakeImporter) ImportConsoleCredentials(ctx context.Context, data []byte) (accountapp.ImportResult, error) {
@@ -58,7 +61,16 @@ func (f *fakeImporter) ImportConsoleCredentials(ctx context.Context, data []byte
 	return accountapp.ImportResult{Created: 1, Updated: 1, Skipped: 0}, nil
 }
 
-func TestImportDefaultsToWebAndConsole(t *testing.T) {
+func (f *fakeImporter) ConvertWebAccountsToBuild(ctx context.Context, ids []uint64) (accountapp.BuildConversionResult, error) {
+	f.buildCalls++
+	f.buildIDs = append([]uint64(nil), ids...)
+	if f.buildErr != nil {
+		return accountapp.BuildConversionResult{Created: 1, Failed: 1}, f.buildErr
+	}
+	return accountapp.BuildConversionResult{Created: 1, Linked: 1, Skipped: 1}, nil
+}
+
+func TestImportDefaultsToWebConsoleAndBuild(t *testing.T) {
 	worker := &fakeWorker{tokens: map[string][]string{"current": {"sso-a", "sso-b"}}}
 	importer := &fakeImporter{}
 	svc := windowsregisterapp.NewService(worker, importer)
@@ -67,14 +79,51 @@ func TestImportDefaultsToWebAndConsole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.SourceCount != 2 || len(result.Results) != 2 {
+	if result.SourceCount != 2 || len(result.Results) != 3 {
 		t.Fatalf("result=%+v", result)
 	}
-	if importer.webCalls != 1 || importer.consoleCalls != 1 {
-		t.Fatalf("calls web=%d console=%d", importer.webCalls, importer.consoleCalls)
+	if importer.webCalls != 1 || importer.consoleCalls != 1 || importer.buildCalls != 1 {
+		t.Fatalf("calls web=%d console=%d build=%d", importer.webCalls, importer.consoleCalls, importer.buildCalls)
+	}
+	if len(importer.buildIDs) != 2 || importer.buildIDs[0] != 11 || importer.buildIDs[1] != 12 {
+		t.Fatalf("build ids=%v", importer.buildIDs)
 	}
 	if !strings.Contains(importer.lastPayload, "sso-a") {
 		t.Fatalf("payload=%q", importer.lastPayload)
+	}
+}
+
+func TestImportDestinationsAreDeduplicatedAndDependencyOrdered(t *testing.T) {
+	worker := &fakeWorker{tokens: map[string][]string{"current": {"sso"}}}
+	importer := &fakeImporter{}
+	svc := windowsregisterapp.NewService(worker, importer)
+
+	result, err := svc.Import(context.Background(), windowsregisterapp.ImportRequest{
+		Scope:        "current",
+		Destinations: []string{"grok_build", "grok_console", "grok_web", "grok_build"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Results) != 3 || result.Results[0].Provider != "grok_web" || result.Results[1].Provider != "grok_console" || result.Results[2].Provider != "grok_build" {
+		t.Fatalf("results=%+v", result.Results)
+	}
+}
+
+func TestImportWebFailureSkipsBuildConversion(t *testing.T) {
+	worker := &fakeWorker{tokens: map[string][]string{"current": {"sso"}}}
+	importer := &fakeImporter{webErr: errors.New("web failed")}
+	svc := windowsregisterapp.NewService(worker, importer)
+
+	result, err := svc.Import(context.Background(), windowsregisterapp.ImportRequest{
+		Scope:        "current",
+		Destinations: []string{"grok_web", "grok_build"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if importer.buildCalls != 0 || len(result.Results) != 2 || !strings.Contains(result.Results[1].Error, "web failed") {
+		t.Fatalf("calls=%d results=%+v", importer.buildCalls, result.Results)
 	}
 }
 

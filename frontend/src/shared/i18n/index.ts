@@ -644,6 +644,7 @@ const resources = {
           stopped: "注册机已停止",
           importCompleted: "已导入 {{count}} 条注册结果",
           importPartial: "{{failed}} / {{total}} 个目标池导入失败",
+          buildResult: "新增 {{created}} · 关联 {{linked}} · 跳过 {{skipped}} · 失败 {{failed}}",
           missingList: "缺少：{{items}}",
           missing: {
             windows: "Windows",
@@ -1344,6 +1345,7 @@ const resources = {
           stopped: "Registration worker stopped",
           importCompleted: "Imported {{count}} registration results",
           importPartial: "{{failed}} / {{total}} destination pools failed to import",
+          buildResult: "Created {{created}} · linked {{linked}} · skipped {{skipped}} · failed {{failed}}",
           missingList: "Missing: {{items}}",
           missing: {
             windows: "Windows",
