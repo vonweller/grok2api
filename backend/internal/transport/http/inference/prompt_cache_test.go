@@ -14,15 +14,22 @@ func TestExtractPromptCacheSeedSupportsClaudeCodeForms(t *testing.T) {
 		want    string
 	}{
 		{name: "claude header", headers: http.Header{"X-Claude-Code-Session-Id": {"claude-session"}, "X-Session-Id": {"generic-session"}}, body: `{"metadata":{"session_id":"body-session"}}`, want: "claude-session"},
+		{name: "codex dedicated header", headers: http.Header{"X-Codex-Session-Id": {"codex-dedicated"}}, want: "codex-dedicated"},
+		{name: "trae header", headers: http.Header{"X-Trae-Session-Id": {"trae-session"}}, want: "trae-session"},
+		{name: "zcode header", headers: http.Header{"X-Zcode-Session-Id": {"zcode-session"}}, want: "zcode-session"},
+		{name: "thread header", headers: http.Header{"X-Thread-Id": {"thread-session"}}, want: "thread-session"},
 		{name: "generic header", headers: http.Header{"X-Session-Id": {"generic-session"}}, want: "generic-session"},
 		{name: "codex hyphen header", headers: http.Header{"Session-Id": {"codex-session"}}, want: "codex-session"},
 		{name: "codex underscore header", headers: http.Header{"Session_id": {"legacy-codex-session"}}, want: "legacy-codex-session"},
 		{name: "metadata snake case", body: `{"metadata":{"session_id":"snake-session"}}`, want: "snake-session"},
 		{name: "metadata camel case", body: `{"metadata":{"sessionId":"camel-session"}}`, want: "camel-session"},
+		{name: "metadata conversation", body: `{"metadata":{"conversation_id":"meta-conversation"}}`, want: "meta-conversation"},
+		{name: "metadata thread", body: `{"metadata":{"threadId":"meta-thread"}}`, want: "meta-thread"},
 		{name: "embedded json user id", body: `{"metadata":{"user_id":"{\"device_id\":\"d1\",\"session_id\":\"embedded-session\"}"}}`, want: "embedded-session"},
 		{name: "suffix user id", body: `{"metadata":{"user_id":"user_account_session_123e4567-e89b-12d3-a456-426614174000"}}`, want: "123e4567-e89b-12d3-a456-426614174000"},
 		{name: "conversation snake case", body: `{"conversation_id":"conversation-session"}`, want: "conversation-session"},
 		{name: "conversation camel case", body: `{"conversationId":"camel-conversation"}`, want: "camel-conversation"},
+		{name: "chat id body", body: `{"chat_id":"chat-session"}`, want: "chat-session"},
 		{name: "body prompt_cache_key", body: `{"prompt_cache_key":"sub2api-session"}`, want: "sub2api-session"},
 		// http.Header canonical key is Session-Id for "session_id"
 		{name: "sub2api session_id via Set", headers: func() http.Header { h := make(http.Header); h.Set("session_id", "sub2-header-session"); return h }(), want: "sub2-header-session"},

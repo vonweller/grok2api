@@ -535,6 +535,9 @@ function Ensure-WindowsRegisterRuntime {
 function Set-WindowsRegisterProcessEnvironment {
     if (Test-Path -LiteralPath $RegisterEnginePath -PathType Container) {
         $env:GROK2API_REGISTER_ENGINE_PATH = $RegisterEnginePath
+        # 让托管进程内的 python -m grok_register.* 在任意 cwd 下都能解析模块。
+        $env:PYTHONPATH = $RegisterEnginePath
+        $env:PYTHONUTF8 = "1"
     }
     $env:GROK2API_WINDOWS_REGISTER_DIR = $RegisterOutputPath
     if (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf) {

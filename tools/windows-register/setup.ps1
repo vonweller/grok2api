@@ -37,11 +37,29 @@ if (-not $SkipBrowserInstall) {
 New-Item -ItemType Directory -Force -Path "keys", "logs" | Out-Null
 
 Write-Host "[4/4] Checking the runtime..."
-$browserPath = & $venvPython -c "from grok_register.register import find_chrome; print(find_chrome())"
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($browserPath)) {
-    throw "CloakBrowser was not found. Run setup.ps1 without -SkipBrowserInstall."
+# 保证从任意工作目录执行 setup.ps1 时都能 import grok_register。
+$oldPythonPath = $env:PYTHONPATH
+$oldPythonUtf8 = $env:PYTHONUTF8
+try {
+    $env:PYTHONPATH = $PSScriptRoot
+    $env:PYTHONUTF8 = "1"
+    $browserPath = & $venvPython -c "from grok_register.register import find_chrome; print(find_chrome())" 2>&1
 }
-$browserPath = $browserPath.Trim()
+finally {
+    if ($null -eq $oldPythonPath) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $oldPythonPath }
+    if ($null -eq $oldPythonUtf8) { Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue } else { $env:PYTHONUTF8 = $oldPythonUtf8 }
+}
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string]$browserPath)) {
+    $detail = (($browserPath | ForEach-Object { "$_" }) -join [Environment]::NewLine).Trim()
+    if ([string]::IsNullOrWhiteSpace($detail)) {
+        throw "CloakBrowser was not found. Run setup.ps1 without -SkipBrowserInstall."
+    }
+    throw ("CloakBrowser was not found. Run setup.ps1 without -SkipBrowserInstall. {0}" -f $detail)
+}
+$browserPath = ([string]$browserPath).Trim()
+if ($browserPath -match "[\r\n]") {
+    $browserPath = (@($browserPath -split "[\r\n]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | Select-Object -Last 1).Trim()
+}
 Write-Host $browserPath
 # Persist for service accounts (e.g. LOCAL SERVICE) that cannot see the interactive profile.
 $markerPath = Join-Path $PSScriptRoot ".browser-path"

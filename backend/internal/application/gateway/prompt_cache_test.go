@@ -61,10 +61,63 @@ func TestResolveBuildSessionIdentitySoftFromMessagesIsStableAcrossTurns(t *testi
 	if first.upstreamID != second.upstreamID || first.affinityKey != second.affinityKey {
 		t.Fatalf("soft identity drifted across turns: first=%#v second=%#v", first, second)
 	}
-	// 不同首条用户内容必须隔离
+	// 无 system/tools 时，不同首条用户内容仍必须隔离
 	other := resolveBuildSessionIdentity(7, accountdomain.ProviderBuild, "grok-4.5", "", "", []byte(`{"messages":[{"role":"user","content":"different"}]}`))
 	if other.upstreamID == first.upstreamID {
 		t.Fatal("different first user shared soft upstream id")
+	}
+}
+
+func TestResolveBuildSessionIdentitySoftSurvivesHistoryTruncation(t *testing.T) {
+	// Claude Code / Codex 长会话会截掉最早 user，但 system + tools 保持稳定。
+	// 旧逻辑把 firstUser 编入身份，截断后 conv-id 漂移，缓存率接近 0。
+	turn1 := []byte(`{
+		"system":"stable agent rules",
+		"tools":[{"name":"Read"},{"name":"Bash"},{"type":"function","function":{"name":"Edit"}}],
+		"messages":[{"role":"user","content":"first question about mutex"}]
+	}`)
+	// 截断后最早 user 消失，只剩较新的对话
+	turnN := []byte(`{
+		"system":"stable agent rules",
+		"tools":[{"type":"function","function":{"name":"Edit"}},{"name":"Bash"},{"name":"Read"}],
+		"messages":[
+			{"role":"user","content":"later question after truncation"},
+			{"role":"assistant","content":"ok"},
+			{"role":"user","content":"continue"}
+		]
+	}`)
+	id1 := resolveBuildSessionIdentity(7, accountdomain.ProviderBuild, "grok-4.5", "", "", turn1)
+	idN := resolveBuildSessionIdentity(7, accountdomain.ProviderBuild, "grok-4.5", "", "", turnN)
+	if !id1.soft || id1.upstreamID == "" {
+		t.Fatalf("expected soft prefix identity, got %#v", id1)
+	}
+	if id1.upstreamID != idN.upstreamID || id1.affinityKey != idN.affinityKey {
+		t.Fatalf("soft identity drifted after history truncation: %#v vs %#v", id1, idN)
+	}
+	// tools 集合变化应隔离，避免不同 Agent 配置互相污染
+	changedTools := []byte(`{
+		"system":"stable agent rules",
+		"tools":[{"name":"Read"},{"name":"Write"}],
+		"messages":[{"role":"user","content":"later question after truncation"}]
+	}`)
+	other := resolveBuildSessionIdentity(7, accountdomain.ProviderBuild, "grok-4.5", "", "", changedTools)
+	if other.upstreamID == id1.upstreamID {
+		t.Fatal("different tools fingerprint must isolate soft session")
+	}
+}
+
+func TestRebuildBuildAffinityKeyIsStableAndModelScoped(t *testing.T) {
+	keyA := rebuildBuildAffinityKey(9, accountdomain.ProviderBuild, "grok-4.5", "session-uuid")
+	keyB := rebuildBuildAffinityKey(9, accountdomain.ProviderBuild, "grok-4.5", "session-uuid")
+	keyOtherModel := rebuildBuildAffinityKey(9, accountdomain.ProviderBuild, "grok-4.3", "session-uuid")
+	if keyA == "" || keyA != keyB {
+		t.Fatalf("affinity restore unstable: %q %q", keyA, keyB)
+	}
+	if keyA == keyOtherModel {
+		t.Fatal("affinity restore must be model-scoped")
+	}
+	if rebuildBuildAffinityKey(0, accountdomain.ProviderBuild, "grok-4.5", "session-uuid") != "" {
+		t.Fatal("missing client ownership must not invent affinity")
 	}
 }
 

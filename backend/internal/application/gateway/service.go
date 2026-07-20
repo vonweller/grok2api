@@ -456,13 +456,15 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	ownershipPromptCacheKey := ""
 	reasoningReplayKey := ""
 	if route.Provider == accountdomain.ProviderBuild {
-		// 显式 key / session seed / 消息锚点 soft session（CPA 风格），禁止空 session 随机 conv-id。
+		// 显式 key / session seed / 稳定前缀 soft session，禁止空 session 随机 conv-id。
 		identity := buildSessionIdentity{}
 		if ownership != nil && ownership.PromptCacheKey != "" {
 			// previous_response_id 属于既有 Response 链，必须继承根会话身份，
 			// 不能用本轮增量 input 重新计算 soft key。
 			identity.upstreamID = ownership.PromptCacheKey
 			identity.replayKey = ownership.ReasoningReplayKey
+			// 同时恢复账号粘滞，避免仅 pin 失败后选号漂移打散缓存亲和。
+			identity.affinityKey = rebuildBuildAffinityKey(input.ClientKey.ID, route.Provider, route.UpstreamModel, ownership.PromptCacheKey)
 		} else {
 			identity = resolveBuildSessionIdentity(
 				input.ClientKey.ID,
