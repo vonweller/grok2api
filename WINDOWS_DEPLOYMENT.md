@@ -74,6 +74,8 @@ deploy.bat restart
 deploy.bat uninstall
 ```
 
+更新文件前可直接运行 `kill.bat`：它会停止进程并移除本项目的开机启动任务，但保留配置、数据库和日志。更新完成后重新运行 `deploy.bat install` 即可恢复开机启动。`kill.bat stop` 只停止当前进程，保留开机任务；`kill.bat status` 查看状态。
+
 `start` 只启动已经安装的低权限计划任务；如果任务尚未安装或已经卸载，请先执行 `deploy.bat install [端口]`。`uninstall` 只删除开机启动任务，保留 `config.yaml`、`data` 和日志。排障时可在当前控制台运行：
 
 ```bat

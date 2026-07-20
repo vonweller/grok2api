@@ -690,7 +690,7 @@ function New-WindowsPackage {
     $frontendParent = Join-Path $stagePath "frontend"
     [System.IO.Directory]::CreateDirectory($frontendParent) | Out-Null
     Copy-Item -LiteralPath $FrontendDist -Destination $frontendParent -Recurse -Force
-    foreach ($file in @("config.example.yaml", "VERSION", "LICENSE", "deploy.bat")) {
+    foreach ($file in @("config.example.yaml", "VERSION", "LICENSE", "deploy.bat", "kill.bat")) {
         Copy-Item -LiteralPath (Join-Path $ProjectRoot $file) -Destination (Join-Path $stagePath $file) -Force
     }
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "deploy.ps1") -Destination (Join-Path $stagePath "deploy.ps1") -Force
