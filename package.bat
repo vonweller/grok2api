@@ -11,7 +11,11 @@ if not exist "%PACKAGE_SCRIPT%" (
   goto :finish
 )
 
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_SCRIPT%" %*
+if /I "%~1"=="clean" (
+  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_SCRIPT%" -Clean
+) else (
+  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%PACKAGE_SCRIPT%" %*
+)
 set "EXIT_CODE=%ERRORLEVEL%"
 
 :finish

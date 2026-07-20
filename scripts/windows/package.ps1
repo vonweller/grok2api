@@ -4,7 +4,9 @@ param(
     [ValidateSet("amd64", "arm64", "all")]
     [string]$Architecture = "all",
 
-    [switch]$SkipChecks
+    [switch]$SkipChecks,
+
+    [switch]$Clean
 )
 
 Set-StrictMode -Version 2.0
@@ -194,6 +196,18 @@ function Assert-NoReparseTree {
     if ($null -ne $link) {
         throw "Refusing to recursively modify a tree containing a junction or symbolic link: $($link.FullName)"
     }
+}
+
+function Remove-PackageGeneratedDirectory {
+    param([string]$Path)
+    $full = [System.IO.Path]::GetFullPath($Path)
+    Assert-NoReparsePath $full $ProjectRoot
+    if (-not (Test-Path -LiteralPath $full)) {
+        return
+    }
+    Assert-NoReparseTree $full
+    Remove-Item -LiteralPath $full -Recurse -Force
+    Write-Success "Removed $full"
 }
 
 function Assert-ToolsChildPath {
@@ -801,6 +815,20 @@ function Publish-Artifacts {
 try {
     if ($PSVersionTable.PSVersion -lt [version]"5.1") {
         throw "Windows PowerShell 5.1 or later is required."
+    }
+    if ($Clean) {
+        Write-Step "Cleaning package caches and generated frontend output..."
+        foreach ($generated in @(
+            (Join-Path $ProjectRoot ".tmp"),
+            (Join-Path $ProjectRoot ".tools"),
+            (Join-Path $ProjectRoot ".pnpm-store"),
+            (Join-Path $ProjectRoot "frontend\dist"),
+            (Join-Path $ProjectRoot "frontend\node_modules")
+        )) {
+            Remove-PackageGeneratedDirectory $generated
+        }
+        Write-Success "Package caches cleaned. release\ was kept."
+        exit 0
     }
     $lockDirectory = Join-Path $ProjectRoot ".tmp"
     Assert-NoReparsePath $lockDirectory $ProjectRoot
