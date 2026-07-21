@@ -16,13 +16,13 @@ import (
 const buildSessionIdentityVersion = "v3"
 
 type buildSessionIdentity struct {
-	// upstreamID 写入上游 prompt_cache_key 与 x-grok-conv-id，须跨轮稳定。
+	// upstreamID is sent as prompt_cache_key and x-grok-conv-id and must remain stable across turns.
 	upstreamID string
-	// affinityKey 用于账号粘滞；按模型隔离，避免不同模型能力账号互相覆盖。
+	// affinityKey controls account stickiness and is isolated by model to avoid cross-model collisions.
 	affinityKey string
-	// replayKey 仅由客户端显式会话信号生成；soft 消息锚点不得驱动 encrypted reasoning 回放。
+	// replayKey is derived only from explicit client session signals; soft anchors must not drive encrypted reasoning replay.
 	replayKey string
-	// soft 表示由消息内容兜底生成（无显式 session 时），仍须稳定。
+	// soft indicates a fallback identity derived from message content when no explicit session is available.
 	soft bool
 }
 
@@ -31,19 +31,25 @@ type buildSessionIdentity struct {
 // 2) 否则用稳定前缀（system/instructions + tools）生成 soft 身份，保证多轮粘滞与 conv-id 不漂移
 // 3) 没有稳定前缀时，再退回首条 user 锚点
 // 4) 完全无信号 → 空身份（禁止每请求随机 ID，避免打散 xAI 服务器亲和）
+// resolveBuildSessionIdentity derives a stable Grok Build session identity:
+// 1. Prefer explicit client session signals, isolated by client key, provider, and model.
+// 2. Fall back to system/instructions and the first user message when no explicit signal exists.
+// 3. Return an empty identity when no signal exists; never generate a random session ID per request.
 func resolveBuildSessionIdentity(clientKeyID uint64, provider accountdomain.Provider, upstreamModel, explicitKey, sessionSeed string, body []byte) buildSessionIdentity {
-	seed := strings.TrimSpace(explicitKey)
+	// Prefer Claude Code and Codex session signals extracted by the transport layer.
+	// body.prompt_cache_key is only a fallback when no stronger header or session signal exists.
+	seed := strings.TrimSpace(sessionSeed)
 	if seed == "" {
-		seed = strings.TrimSpace(sessionSeed)
+		seed = strings.TrimSpace(explicitKey)
 	}
 	model := strings.ToLower(strings.TrimSpace(upstreamModel))
 	if clientKeyID == 0 || provider == "" || model == "" {
 		return buildSessionIdentity{}
 	}
 	if seed != "" {
-		upstreamSource := fmt.Sprintf("grok2api:build-session:%s:%d:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, seed)
+		upstreamSource := fmt.Sprintf("grok2api:build-session:%s:%d:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, seed)
 		affinitySource := fmt.Sprintf("grok2api:build-affinity:%s:%d:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, seed)
-		replaySource := fmt.Sprintf("grok2api:build-replay:%s:%d:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, seed)
+		replaySource := fmt.Sprintf("grok2api:build-replay:%s:%d:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, seed)
 		return buildSessionIdentity{
 			upstreamID:  digestUUID(upstreamSource),
 			affinityKey: hexDigest(affinitySource),
@@ -53,6 +59,7 @@ func resolveBuildSessionIdentity(clientKeyID uint64, provider accountdomain.Prov
 
 	// 无显式 session 时，优先用 system + tools 这类跨轮稳定前缀。
 	// Claude Code / Codex 长会话会截断早期 user 消息，把 firstUser 编入身份会导致 conv-id 漂移、缓存率接近 0。
+	// Fall back to a message-prefix hash to keep account affinity and session IDs stable without client session signals.
 	system, firstUser, _ := extractMessageAnchors(body)
 	toolsFingerprint := extractToolsFingerprint(body)
 	system = truncateAnchor(system, 400)
@@ -72,6 +79,8 @@ func resolveBuildSessionIdentity(clientKeyID uint64, provider accountdomain.Prov
 	}
 	upstreamSource := fmt.Sprintf("grok2api:build-soft-session:%s:%d:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, firstUser)
 	affinitySource := fmt.Sprintf("grok2api:build-soft-affinity:%s:%d:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, firstUser)
+	upstreamSource := fmt.Sprintf("grok2api:build-soft-session:%s:%d:%s:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, system, firstUser)
+	affinitySource := fmt.Sprintf("grok2api:build-soft-affinity:%s:%d:%s:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, system, firstUser)
 	return buildSessionIdentity{
 		upstreamID:  digestUUID(upstreamSource),
 		affinityKey: hexDigest(affinitySource),
@@ -112,8 +121,8 @@ func truncateAnchor(value string, maxRunes int) string {
 	return string(runes[:maxRunes])
 }
 
-// extractMessageAnchors 从 Chat / Messages / Responses 请求体提取稳定前缀锚点。
-// 仅使用 system + 首条 user（及可选首条 assistant），避免后续轮次追加导致 hash 漂移。
+// extractMessageAnchors extracts stable prefix anchors from Chat, Messages, and Responses request bodies.
+// It uses only system, the first user message, and an optional first assistant message to avoid hash drift across turns.
 func extractMessageAnchors(body []byte) (system, firstUser, firstAssistant string) {
 	if len(body) == 0 {
 		return "", "", ""
@@ -122,7 +131,7 @@ func extractMessageAnchors(body []byte) (system, firstUser, firstAssistant strin
 	if json.Unmarshal(body, &root) != nil {
 		return "", "", ""
 	}
-	// 顶层 system / instructions（OpenAI Responses / Chat 常见）作为稳定前缀 system 锚点。
+	// Top-level system or instructions fields provide a stable system anchor for OpenAI Responses and Chat.
 	if raw, ok := root["instructions"]; ok {
 		system = flattenMessageContent(raw)
 	}
@@ -255,7 +264,7 @@ func anchorsFromRoleMessages(raw json.RawMessage) (system, firstUser, firstAssis
 }
 
 func anchorsFromResponsesInput(raw json.RawMessage) (system, firstUser, firstAssistant string) {
-	// 简写：input 直接是字符串
+	// Shorthand form: input is a direct string.
 	var asString string
 	if json.Unmarshal(raw, &asString) == nil {
 		return "", strings.TrimSpace(asString), ""
@@ -270,13 +279,13 @@ func anchorsFromResponsesInput(raw json.RawMessage) (system, firstUser, firstAss
 		_ = json.Unmarshal(item["role"], &role)
 		typeName = strings.TrimSpace(typeName)
 		role = strings.ToLower(strings.TrimSpace(role))
-		// instructions 级 system 由顶层处理；此处抓 message
+		// Top-level instructions handle the system anchor; this branch extracts messages.
 		if typeName != "" && typeName != "message" {
 			continue
 		}
 		content := flattenMessageContent(item["content"])
 		if content == "" {
-			// 兼容 content 为字符串字段 text
+			// Support content objects whose text field is a string.
 			var text string
 			if json.Unmarshal(item["text"], &text) == nil {
 				content = strings.TrimSpace(text)
@@ -299,7 +308,7 @@ func anchorsFromResponsesInput(raw json.RawMessage) (system, firstUser, firstAss
 				firstAssistant = content
 			}
 		default:
-			// 无 role 的纯文本 input 项视为 user
+			// Treat role-less plain-text input items as user input.
 			if role == "" && firstUser == "" && (typeName == "" || typeName == "message") {
 				firstUser = content
 			}
@@ -308,7 +317,7 @@ func anchorsFromResponsesInput(raw json.RawMessage) (system, firstUser, firstAss
 			break
 		}
 	}
-	// 顶层 instructions 作为 system 补充
+	// Use top-level instructions as a system fallback.
 	return system, firstUser, firstAssistant
 }
 
