@@ -59,9 +59,11 @@ type Config struct {
 
 // WindowsRegisterConfig configures the managed Windows registration worker.
 type WindowsRegisterConfig struct {
-	Enabled    bool   `yaml:"enabled"`
+	Enabled     bool   `yaml:"enabled"`
+	BrowserPath string `yaml:"browserPath"`
+	OutputDir   string `yaml:"outputDir"`
+	// Deprecated compatibility fields. Native registration ignores them.
 	EnginePath string `yaml:"enginePath"`
-	OutputDir  string `yaml:"outputDir"`
 	PythonPath string `yaml:"pythonPath"`
 }
 
@@ -317,6 +319,10 @@ func resolveRelativePaths(cfg *Config, configPath string) error {
 	if staticPath != "" && !filepath.IsAbs(staticPath) {
 		cfg.Frontend.StaticPath = filepath.Clean(filepath.Join(baseDir, staticPath))
 	}
+	browserPath := strings.TrimSpace(cfg.WindowsRegister.BrowserPath)
+	if browserPath != "" && !filepath.IsAbs(browserPath) {
+		cfg.WindowsRegister.BrowserPath = filepath.Clean(filepath.Join(baseDir, browserPath))
+	}
 	enginePath := strings.TrimSpace(cfg.WindowsRegister.EnginePath)
 	if enginePath != "" && !filepath.IsAbs(enginePath) {
 		cfg.WindowsRegister.EnginePath = filepath.Clean(filepath.Join(baseDir, enginePath))
@@ -564,9 +570,8 @@ func defaultConfig() Config {
 		},
 		Frontend: FrontendConfig{PublicAPIBaseURL: DefaultPublicAPIBaseURL, StaticPath: "./frontend/dist"},
 		WindowsRegister: WindowsRegisterConfig{
-			Enabled:    true,
-			EnginePath: "./tools/windows-register",
-			OutputDir:  "./data/windows-register",
+			Enabled:   true,
+			OutputDir: "./data/windows-register",
 		},
 		Database: DatabaseConfig{
 			Driver:   "sqlite",

@@ -118,6 +118,50 @@ secrets:
 	}
 }
 
+func TestLoadWindowsRegisterBrowserPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	data := []byte(`windowsRegister:
+  enabled: true
+  browserPath: ./runtime/chrome.exe
+  outputDir: ./data/windows-register
+secrets:
+  jwtSecret: "12345678901234567890123456789012"
+  credentialEncryptionKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "runtime", "chrome.exe")
+	if cfg.WindowsRegister.BrowserPath != want {
+		t.Fatalf("browserPath = %q, want %q", cfg.WindowsRegister.BrowserPath, want)
+	}
+}
+
+func TestLoadAcceptsDeprecatedWindowsRegisterFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`windowsRegister:
+  enabled: true
+  enginePath: ./tools/windows-register
+  pythonPath: python
+  outputDir: ./data/windows-register
+secrets:
+  jwtSecret: "12345678901234567890123456789012"
+  credentialEncryptionKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("legacy config must remain loadable: %v", err)
+	}
+}
+
 func TestLoadAcceptsRuntimeDefaultsAndRejectsUnknownFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	data := []byte(`secrets:

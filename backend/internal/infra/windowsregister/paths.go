@@ -50,7 +50,24 @@ func resolvePython(configured, enginePath string) string {
 	return ""
 }
 
-func resolveBrowserPath(enginePath string) string {
+func resolveBrowserPath(configured, managed string, system []string) string {
+	candidates := append([]string{strings.TrimSpace(configured), strings.TrimSpace(managed)}, system...)
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || !fileExists(candidate) {
+			continue
+		}
+		absolute, err := filepath.Abs(candidate)
+		if err == nil {
+			return filepath.Clean(absolute)
+		}
+	}
+	return ""
+}
+
+// resolveLegacyBrowserPath keeps the subprocess worker functional until the
+// native runner replaces it. It is removed with the Python runtime.
+func resolveLegacyBrowserPath(enginePath string) string {
 	for _, key := range []string{"CLOAKBROWSER_EXECUTABLE_PATH", "XAI_ENROLLER_BROWSER_EXECUTABLE"} {
 		if value := strings.TrimSpace(strings.Trim(os.Getenv(key), `"`)); value != "" {
 			value = os.ExpandEnv(value)
