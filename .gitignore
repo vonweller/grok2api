@@ -43,6 +43,7 @@ Thumbs.db
 /frontend/*.tsbuildinfo
 
 # Temporary files
+/.tools/
 /release/
 /.tools/
 /.tmp/
