@@ -29,16 +29,22 @@ func TestOfficialCache_Sub2APIPromptCacheKeyStickyAcrossTurns(t *testing.T) {
 }
 
 func TestOfficialCache_Sub2APIMissingSessionFallsBackToMessageHash(t *testing.T) {
-	// Sub2API 没透传任何 session：靠首条 user 内容 soft 粘滞
+	// Sub2API 没透传任何 session：靠 system/tools 稳定前缀 soft 粘滞
 	turn1 := []byte(`{"messages":[{"role":"system","content":"sys"},{"role":"user","content":"what is mutex"}]}`)
 	turn2 := []byte(`{"messages":[{"role":"system","content":"sys"},{"role":"user","content":"what is mutex"},{"role":"assistant","content":"A lock."},{"role":"user","content":"and deadlock?"}]}`)
+	// 模拟长会话截断：最早 user 已不在 messages 中
+	turnTruncated := []byte(`{"messages":[{"role":"system","content":"sys"},{"role":"user","content":"and deadlock?"},{"role":"assistant","content":"more"}]}`)
 	id1 := resolveBuildSessionIdentity(7, accountdomain.ProviderBuild, "grok-4.5", "", "", turn1)
 	id2 := resolveBuildSessionIdentity(7, accountdomain.ProviderBuild, "grok-4.5", "", "", turn2)
+	id3 := resolveBuildSessionIdentity(7, accountdomain.ProviderBuild, "grok-4.5", "", "", turnTruncated)
 	if !id1.soft || id1.upstreamID == "" {
 		t.Fatalf("expected soft session, got %#v", id1)
 	}
 	if id1.upstreamID != id2.upstreamID {
 		t.Fatalf("soft session drifted: %s vs %s", id1.upstreamID, id2.upstreamID)
+	}
+	if id1.upstreamID != id3.upstreamID {
+		t.Fatalf("soft session drifted after truncation: %s vs %s", id1.upstreamID, id3.upstreamID)
 	}
 }
 

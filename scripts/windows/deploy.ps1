@@ -535,6 +535,9 @@ function Ensure-WindowsRegisterRuntime {
 function Set-WindowsRegisterProcessEnvironment {
     if (Test-Path -LiteralPath $RegisterEnginePath -PathType Container) {
         $env:GROK2API_REGISTER_ENGINE_PATH = $RegisterEnginePath
+        # 让托管进程内的 python -m grok_register.* 在任意 cwd 下都能解析模块。
+        $env:PYTHONPATH = $RegisterEnginePath
+        $env:PYTHONUTF8 = "1"
     }
     $env:GROK2API_WINDOWS_REGISTER_DIR = $RegisterOutputPath
     if (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf) {
@@ -1145,7 +1148,9 @@ try {
                 Write-Step "Windows registration worker is ready in the admin UI under Registration."
             }
             else {
-                Write-WarningLine "Core service started, but Windows registration runtime is not ready. Install Python 3.10+ and re-run deploy.bat install if you need the registration worker."
+                # 注册机依赖故意不打进 ZIP（体积大、含运行时缓存），需在目标机现装。
+                # 核心 API 不受影响；仅 Windows 浏览器注册功能需要 Python 3.10+ 与首次联网。
+                Write-WarningLine "Core service started, but Windows registration runtime is not ready. Install Python 3.10+ (in PATH), ensure the machine can reach PyPI, then re-run deploy.bat install."
             }
         }
     }
