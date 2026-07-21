@@ -40,28 +40,6 @@ const (
 
 // Config 表示后端运行配置。
 type Config struct {
-		Server            ServerConfig            `yaml:"server"`
-		Frontend          FrontendConfig          `yaml:"frontend"`
-		Database          DatabaseConfig          `yaml:"database"`
-		RuntimeStore      RuntimeStoreConfig      `yaml:"runtimeStore"`
-		Auth              AuthConfig              `yaml:"auth"`
-		Secrets           Secrets                 `yaml:"secrets"`
-		BootstrapAdmin    BootstrapAdminConfig    `yaml:"bootstrapAdmin"`
-		Provider          ProviderConfig          `yaml:"provider"`
-		Batch             BatchConfig             `yaml:"-"`
-		Media             MediaConfig             `yaml:"media"`
-		Routing           RoutingConfig           `yaml:"routing"`
-		Audit             AuditConfig             `yaml:"audit"`
-		ClientKeyDefaults ClientKeyDefaultsConfig `yaml:"clientKeyDefaults"`
-		WindowsRegister   WindowsRegisterConfig   `yaml:"windowsRegister"`
-	}
-
-// WindowsRegisterConfig configures the managed Windows registration worker.
-type WindowsRegisterConfig struct {
-	Enabled    bool   `yaml:"enabled"`
-	EnginePath string `yaml:"enginePath"`
-	OutputDir  string `yaml:"outputDir"`
-	PythonPath string `yaml:"pythonPath"`
 	Server            ServerConfig            `yaml:"server"`
 	Frontend          FrontendConfig          `yaml:"frontend"`
 	Database          DatabaseConfig          `yaml:"database"`
@@ -76,6 +54,15 @@ type WindowsRegisterConfig struct {
 	Audit             AuditConfig             `yaml:"audit"`
 	ClientKeyDefaults ClientKeyDefaultsConfig `yaml:"clientKeyDefaults"`
 	Accounts          AccountsConfig          `yaml:"-"`
+	WindowsRegister   WindowsRegisterConfig   `yaml:"windowsRegister"`
+}
+
+// WindowsRegisterConfig configures the managed Windows registration worker.
+type WindowsRegisterConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	EnginePath string `yaml:"enginePath"`
+	OutputDir  string `yaml:"outputDir"`
+	PythonPath string `yaml:"pythonPath"`
 }
 
 type ServerConfig struct {
@@ -341,7 +328,7 @@ func resolveRelativePaths(cfg *Config, configPath string) error {
 	pythonPath := strings.TrimSpace(cfg.WindowsRegister.PythonPath)
 	if pythonPath != "" && !filepath.IsAbs(pythonPath) {
 		// Keep bare command names like "python" unresolved; only resolve relative paths.
-		if strings.ContainsAny(pythonPath, `/\`) {
+		if strings.ContainsAny(pythonPath, `/\\`) {
 			cfg.WindowsRegister.PythonPath = filepath.Clean(filepath.Join(baseDir, pythonPath))
 		}
 	}
@@ -575,17 +562,17 @@ func defaultConfig() Config {
 			ReadTimeout:           Duration(15 * time.Minute),
 			RequestTimeout:        Duration(2 * time.Hour),
 		},
-Frontend: FrontendConfig{PublicAPIBaseURL: DefaultPublicAPIBaseURL, StaticPath: "./frontend/dist"},
-			WindowsRegister: WindowsRegisterConfig{
-				Enabled:    true,
-				EnginePath: "./tools/windows-register",
-				OutputDir:  "./data/windows-register",
-			},
-			Database: DatabaseConfig{
-				Driver:   "sqlite",
-				SQLite:   SQLiteDatabaseConfig{Path: "./data/backend.db"},
-				Postgres: PostgresDatabaseConfig{MaxOpenConns: 50, MaxIdleConns: 10},
-			},
+		Frontend: FrontendConfig{PublicAPIBaseURL: DefaultPublicAPIBaseURL, StaticPath: "./frontend/dist"},
+		WindowsRegister: WindowsRegisterConfig{
+			Enabled:    true,
+			EnginePath: "./tools/windows-register",
+			OutputDir:  "./data/windows-register",
+		},
+		Database: DatabaseConfig{
+			Driver:   "sqlite",
+			SQLite:   SQLiteDatabaseConfig{Path: "./data/backend.db"},
+			Postgres: PostgresDatabaseConfig{MaxOpenConns: 50, MaxIdleConns: 10},
+		},
 		RuntimeStore: RuntimeStoreConfig{
 			Driver: "memory",
 			Redis:  RedisRuntimeConfig{Address: "127.0.0.1:6379", KeyPrefix: "grok2api:"},

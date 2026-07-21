@@ -374,6 +374,7 @@ function Get-RegisterBrowserPath {
     $searchRoots = @(
         (Join-Path $RegisterEnginePath ".cloakbrowser"),
         (Join-Path $RegisterEnginePath "browser"),
+        (Join-Path $RegisterEnginePath "AppData\Local\cloakbrowser"),
         (Join-Path $env:USERPROFILE ".cloakbrowser")
     )
     if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
@@ -455,24 +456,27 @@ function Ensure-WindowsRegisterRuntime {
         return
     }
 
-    if (-not (Test-IsAdministratorAccount)) {
-        Write-WarningLine "Windows register runtime is incomplete and this process is not elevated. Registration may stay unavailable until an administrator runs deploy.bat install."
+    if (-not (Test-RegisterEngineWritable)) {
+        Write-WarningLine "Windows register runtime is incomplete and tools\windows-register is not writable. Run deploy.bat install from an elevated prompt, or extract the package to a user-writable folder."
         if ($Required) {
             throw "Windows register runtime is not ready."
         }
         return
     }
+    if (-not (Test-IsAdministratorAccount)) {
+        Write-WarningLine "Current process is not elevated. Attempting local register runtime setup in the package folder..."
+    }
 
     $hostPython = Resolve-HostPython
     if ([string]::IsNullOrWhiteSpace($hostPython)) {
-        Write-WarningLine "Python 3.10+ was not found. Install Python and re-run deploy.bat install to enable the Windows registration worker. Core API features remain available."
+        Write-WarningLine "Python 3.10+ was not found. Install Python from https://www.python.org/downloads/ (enable Add python.exe to PATH), then re-run deploy.bat install. Core API features remain available; only Windows registration needs Python/Playwright/CloakBrowser."
         if ($Required) {
             throw "Python 3.10+ is required for the Windows registration worker."
         }
         return
     }
 
-    Write-Step "Preparing Windows register runtime (Python + CloakBrowser)..."
+    Write-Step "Preparing Windows register runtime (Python + Playwright + CloakBrowser)..."
     $venvDir = Join-Path $RegisterEnginePath ".venv"
     if (-not (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf)) {
         Write-Step "Creating register virtualenv..."
@@ -1150,7 +1154,9 @@ try {
             else {
                 # 注册机依赖故意不打进 ZIP（体积大、含运行时缓存），需在目标机现装。
                 # 核心 API 不受影响；仅 Windows 浏览器注册功能需要 Python 3.10+ 与首次联网。
-                Write-WarningLine "Core service started, but Windows registration runtime is not ready. Install Python 3.10+ (in PATH), ensure the machine can reach PyPI, then re-run deploy.bat install."
+                Write-WarningLine "Core service started, but Windows registration runtime is not ready."
+                Write-WarningLine "Missing packages such as Playwright/CloakBrowser mean tools\windows-register\.venv was not prepared on this machine."
+                Write-WarningLine "Fix: install Python 3.10+ with PATH enabled, ensure outbound access to PyPI, then re-run deploy.bat install (or tools\windows-register\setup.ps1)."
             }
         }
     }

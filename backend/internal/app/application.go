@@ -51,27 +51,6 @@ import (
 
 // Application 管理后端进程生命周期和本地后台任务。
 type Application struct {
-	logger          *slog.Logger
-	database        *relational.Database
-	server          *http.Server
-	audits          *auditapp.Service
-	responses       repository.ResponseRepository
-	runtime         io.Closer
-	settingsBus     repository.SettingsChangeBus
-	settings        *settingsapp.Service
-	gateway         *gateway.Service
-	media           *mediaapp.Service
-	quotaRecovery   *quotarecoveryapp.Service
-	accounts        *accountapp.Service
-	models          *modelapp.Service
-	clientKeys      *clientkeyapp.Service
-	updates         *updatecheckapp.Service
-	windowsRegister *windowsregisterinfra.Service
-	accountRepo     repository.AccountRepository
-	modelRepo       repository.ModelRepository
-	providers       *provider.Registry
-	web             *webprovider.Adapter
-	startup         *startupState
 	logger        *slog.Logger
 	database      *relational.Database
 	server        *http.Server
@@ -85,9 +64,10 @@ type Application struct {
 	quotaRecovery *quotarecoveryapp.Service
 	accounts      *accountapp.Service
 	models        *modelapp.Service
-	clientKeys    *clientkeyapp.Service
-	updates       *updatecheckapp.Service
-	accountRepo   repository.AccountRepository
+	clientKeys      *clientkeyapp.Service
+	updates         *updatecheckapp.Service
+	windowsRegister *windowsregisterinfra.Service
+	accountRepo     repository.AccountRepository
 	modelRepo     repository.ModelRepository
 	providers     *provider.Registry
 	web           *webprovider.Adapter
@@ -333,25 +313,26 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		clientKeyService.UpdateDefaults(next.ClientKeyDefaults.RPMLimit, next.ClientKeyDefaults.MaxConcurrent)
 		accountService.UpdateAutoCleanConfig(accountAutoCleanConfig(next.Accounts))
 	})
-updateService := updatecheckapp.NewService(buildinfo.CurrentVersion(), nil)
-		windowsRegisterWorker := newWindowsRegisterWorker(cfg)
-		windowsRegisterService := windowsregisterapp.NewService(windowsRegisterWorker, accountService)
+	updateService := updatecheckapp.NewService(buildinfo.CurrentVersion(), nil)
+	windowsRegisterWorker := newWindowsRegisterWorker(cfg)
+	windowsRegisterService := windowsregisterapp.NewService(windowsRegisterWorker, accountService)
 
-		startup := newStartupState(len(windows))
-		readiness := func(readyCtx context.Context) httpserver.ReadinessSnapshot {
-			return readinessSnapshot(readyCtx, startup, runtimeHealth, modelRepo, accountRepo, providers)
-		}
-		router := httpserver.New(httpserver.Dependencies{Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, Updates: updateService, WindowsRegister: windowsRegisterService})
-		server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
-		return &Application{
-			logger: logger, database: database, server: server,
-			audits: auditService, responses: responseRepo, runtime: runtimeStore,
-			settingsBus: settingsBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService,
-			windowsRegister: windowsRegisterWorker,
-			accountRepo: accountRepo, modelRepo: modelRepo, providers: providers, web: webAdapter, startup: startup,
-		}, nil
+	startup := newStartupState(len(windows))
+	readiness := func(readyCtx context.Context) httpserver.ReadinessSnapshot {
+		return readinessSnapshot(readyCtx, startup, runtimeHealth, modelRepo, accountRepo, providers)
 	}
+	router := httpserver.New(httpserver.Dependencies{Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, Updates: updateService, WindowsRegister: windowsRegisterService})
+	server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
+	return &Application{
+		logger: logger, database: database, server: server,
+		audits: auditService, responses: responseRepo, runtime: runtimeStore,
+		settingsBus: settingsBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService,
+		windowsRegister: windowsRegisterWorker,
+		accountRepo: accountRepo, modelRepo: modelRepo, providers: providers, web: webAdapter, egress: egressManager, startup: startup,
+	}, nil
+}
 
+// newWindowsRegisterWorker builds the managed Windows registration worker from config and env overrides.
 func newWindowsRegisterWorker(cfg config.Config) *windowsregisterinfra.Service {
 	enginePath := strings.TrimSpace(cfg.WindowsRegister.EnginePath)
 	if enginePath == "" {
@@ -388,14 +369,6 @@ func newWindowsRegisterWorker(cfg config.Config) *windowsregisterinfra.Service {
 		OutputDir:  outputDir,
 		PythonPath: pythonPath,
 	})
-	router := httpserver.New(httpserver.Dependencies{Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, Updates: updateService})
-	server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
-	return &Application{
-		logger: logger, database: database, server: server,
-		audits: auditService, responses: responseRepo, runtime: runtimeStore,
-		settingsBus: settingsBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService,
-		accountRepo: accountRepo, modelRepo: modelRepo, providers: providers, web: webAdapter, egress: egressManager, startup: startup,
-	}, nil
 }
 
 func maxBatchConcurrency(value config.BatchConfig) int {
@@ -593,15 +566,15 @@ func (a *Application) Run(ctx context.Context) error {
 }
 
 func (a *Application) Close() error {
-		if a.windowsRegister != nil {
-			a.windowsRegister.Close()
-		}
-		var runtimeErr error
-		if a.runtime != nil {
-			runtimeErr = a.runtime.Close()
-		}
-		return errors.Join(runtimeErr, a.database.Close())
+	if a.windowsRegister != nil {
+		a.windowsRegister.Close()
 	}
+	var runtimeErr error
+	if a.runtime != nil {
+		runtimeErr = a.runtime.Close()
+	}
+	return errors.Join(runtimeErr, a.database.Close())
+}
 
 func (a *Application) runPeriodicTask(ctx context.Context, interval time.Duration, name string, task func(context.Context) error) {
 	timer := time.NewTimer(interval)

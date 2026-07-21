@@ -14,6 +14,18 @@ func PlatformSupported() bool {
 }
 
 func resolvePython(configured, enginePath string) string {
+	// Prefer the package-local virtualenv before any host interpreter. ZIP packages
+	// never ship site-packages; deploy.ps1 creates tools/windows-register/.venv and
+	// installs playwright/cloakbrowser there. Falling back to a bare host python
+	// makes the admin UI report "missing: playwright, cloakbrowser" even after setup.
+	venvPython := filepath.Join(enginePath, ".venv", "Scripts", "python.exe")
+	if fileExists(venvPython) {
+		return venvPython
+	}
+	venvPythonUnix := filepath.Join(enginePath, ".venv", "bin", "python")
+	if fileExists(venvPythonUnix) {
+		return venvPythonUnix
+	}
 	if value := strings.TrimSpace(configured); value != "" {
 		if fileExists(value) {
 			return value
@@ -29,14 +41,6 @@ func resolvePython(configured, enginePath string) string {
 		if path, err := exec.LookPath(env); err == nil {
 			return path
 		}
-	}
-	venvPython := filepath.Join(enginePath, ".venv", "Scripts", "python.exe")
-	if fileExists(venvPython) {
-		return venvPython
-	}
-	venvPythonUnix := filepath.Join(enginePath, ".venv", "bin", "python")
-	if fileExists(venvPythonUnix) {
-		return venvPythonUnix
 	}
 	for _, candidate := range []string{"py", "python", "python3"} {
 		if path, err := exec.LookPath(candidate); err == nil {
@@ -55,7 +59,7 @@ func resolveBrowserPath(enginePath string) string {
 			}
 		}
 	}
-	// setup.ps1 can pin the discovered browser for service accounts that do not
+	// setup.ps1 / deploy.ps1 can pin the discovered browser for service accounts that do not
 	// share the interactive user's profile paths.
 	if enginePath != "" {
 		if marker := strings.TrimSpace(readFirstLine(filepath.Join(enginePath, ".browser-path"))); marker != "" && fileExists(marker) {
@@ -63,6 +67,15 @@ func resolveBrowserPath(enginePath string) string {
 		}
 	}
 	var roots []string
+	// deploy.ps1 installs Chromium under the package tree so scheduled tasks and
+	// plain exe launches can both resolve it without the interactive profile.
+	if enginePath != "" {
+		roots = append(roots,
+			filepath.Join(enginePath, ".cloakbrowser"),
+			filepath.Join(enginePath, "browser"),
+			filepath.Join(enginePath, "AppData", "Local", "cloakbrowser"),
+		)
+	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		roots = append(roots, filepath.Join(home, ".cloakbrowser"))
 	}
