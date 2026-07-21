@@ -671,19 +671,28 @@ function Ensure-WindowsRegisterRuntime {
 }
 
 function Set-WindowsRegisterProcessEnvironment {
-    if (Test-Path -LiteralPath $RegisterEnginePath -PathType Container) {
-        $env:GROK2API_REGISTER_ENGINE_PATH = $RegisterEnginePath
-        # 让托管进程内的 python -m grok_register.* 在任意 cwd 下都能解析模块。
-        $env:PYTHONPATH = $RegisterEnginePath
-        $env:PYTHONUTF8 = "1"
+    # Best-effort only. Failures here must never prevent grok2api.exe from starting.
+    try {
+        if (Test-Path -LiteralPath $RegisterEnginePath -PathType Container -ErrorAction SilentlyContinue) {
+            $env:GROK2API_REGISTER_ENGINE_PATH = $RegisterEnginePath
+            # 让托管进程内的 python -m grok_register.* 在任意 cwd 下都能解析模块。
+            $env:PYTHONPATH = $RegisterEnginePath
+            $env:PYTHONUTF8 = "1"
+        }
+        $env:GROK2API_WINDOWS_REGISTER_DIR = $RegisterOutputPath
+        if (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf -ErrorAction SilentlyContinue) {
+            $env:GROK2API_REGISTER_PYTHON = $RegisterPythonPath
+        }
+        $browser = Get-RegisterBrowserPath
+        if (-not [string]::IsNullOrWhiteSpace($browser)) {
+            $env:CLOAKBROWSER_EXECUTABLE_PATH = $browser
+        }
+        else {
+            Remove-Item Env:CLOAKBROWSER_EXECUTABLE_PATH -ErrorAction SilentlyContinue
+        }
     }
-    $env:GROK2API_WINDOWS_REGISTER_DIR = $RegisterOutputPath
-    if (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf) {
-        $env:GROK2API_REGISTER_PYTHON = $RegisterPythonPath
-    }
-    $browser = Get-RegisterBrowserPath
-    if (-not [string]::IsNullOrWhiteSpace($browser)) {
-        $env:CLOAKBROWSER_EXECUTABLE_PATH = $browser
+    catch {
+        # Core API must still boot for LOCAL SERVICE even if register env setup fails.
     }
 }
 
@@ -1286,7 +1295,13 @@ try {
             Initialize-Config | Out-Null
             # Do not bootstrap or rewrite package files under LOCAL SERVICE.
             # deploy.bat install/start already prepared the register runtime as admin.
-            Set-WindowsRegisterProcessEnvironment
+            # Register browser env is best-effort and must never prevent core API startup.
+            try {
+                Set-WindowsRegisterProcessEnvironment
+            }
+            catch {
+                # swallow: core API still starts without Windows registration worker env
+            }
             $serviceExitCode = Start-ManagedProcess -Value $Port -Wait
             throw "Grok2API exited with code $serviceExitCode."
         }
