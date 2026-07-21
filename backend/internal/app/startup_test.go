@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,9 +12,28 @@ import (
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
+	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
+
+func TestNewWindowsRegisterWorkerUsesBrowserPathWithoutPython(t *testing.T) {
+	t.Setenv("ProgramFiles", "")
+	t.Setenv("ProgramFiles(x86)", "")
+	t.Setenv("LocalAppData", "")
+	t.Setenv("GROK2API_REGISTER_BROWSER", "")
+	browser := filepath.Join(t.TempDir(), "chrome.exe")
+	if err := os.WriteFile(browser, []byte("browser"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	worker := newWindowsRegisterWorker(config.Config{WindowsRegister: config.WindowsRegisterConfig{
+		Enabled: true, BrowserPath: browser, OutputDir: filepath.Join(t.TempDir(), "out"),
+	}})
+	status := worker.Status()
+	if !status.Ready || !status.BrowserInstalled {
+		t.Fatalf("status = %+v", status)
+	}
+}
 
 func TestReadinessStartupReportDoesNotExposeInternalErrors(t *testing.T) {
 	state := newStartupState(0)

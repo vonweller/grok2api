@@ -51,28 +51,28 @@ import (
 
 // Application 管理后端进程生命周期和本地后台任务。
 type Application struct {
-	logger        *slog.Logger
-	database      *relational.Database
-	server        *http.Server
-	audits        *auditapp.Service
-	responses     repository.ResponseRepository
-	runtime       io.Closer
-	settingsBus   repository.SettingsChangeBus
-	settings      *settingsapp.Service
-	gateway       *gateway.Service
-	media         *mediaapp.Service
-	quotaRecovery *quotarecoveryapp.Service
-	accounts      *accountapp.Service
-	models        *modelapp.Service
+	logger          *slog.Logger
+	database        *relational.Database
+	server          *http.Server
+	audits          *auditapp.Service
+	responses       repository.ResponseRepository
+	runtime         io.Closer
+	settingsBus     repository.SettingsChangeBus
+	settings        *settingsapp.Service
+	gateway         *gateway.Service
+	media           *mediaapp.Service
+	quotaRecovery   *quotarecoveryapp.Service
+	accounts        *accountapp.Service
+	models          *modelapp.Service
 	clientKeys      *clientkeyapp.Service
 	updates         *updatecheckapp.Service
 	windowsRegister *windowsregisterinfra.Service
 	accountRepo     repository.AccountRepository
-	modelRepo     repository.ModelRepository
-	providers     *provider.Registry
-	web           *webprovider.Adapter
-	egress        *infraegress.Manager
-	startup       *startupState
+	modelRepo       repository.ModelRepository
+	providers       *provider.Registry
+	web             *webprovider.Adapter
+	egress          *infraegress.Manager
+	startup         *startupState
 }
 
 // New 完成数据库、Provider、应用服务和 HTTP 路由装配。
@@ -328,33 +328,27 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		audits: auditService, responses: responseRepo, runtime: runtimeStore,
 		settingsBus: settingsBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService,
 		windowsRegister: windowsRegisterWorker,
-		accountRepo: accountRepo, modelRepo: modelRepo, providers: providers, web: webAdapter, egress: egressManager, startup: startup,
+		accountRepo:     accountRepo, modelRepo: modelRepo, providers: providers, web: webAdapter, egress: egressManager, startup: startup,
 	}, nil
 }
 
-// newWindowsRegisterWorker builds the managed Windows registration worker from config and env overrides.
+// newWindowsRegisterWorker builds the native Windows registration worker.
 func newWindowsRegisterWorker(cfg config.Config) *windowsregisterinfra.Service {
-	enginePath := strings.TrimSpace(cfg.WindowsRegister.EnginePath)
-	if enginePath == "" {
-		enginePath = "./tools/windows-register"
-	}
+	browserPath := strings.TrimSpace(cfg.WindowsRegister.BrowserPath)
 	outputDir := strings.TrimSpace(cfg.WindowsRegister.OutputDir)
 	if outputDir == "" {
 		outputDir = "./data/windows-register"
 	}
-	if env := strings.TrimSpace(os.Getenv("GROK2API_REGISTER_ENGINE_PATH")); env != "" {
-		enginePath = env
+	if env := strings.TrimSpace(os.Getenv("GROK2API_REGISTER_BROWSER")); env != "" {
+		browserPath = env
 	}
 	if env := strings.TrimSpace(os.Getenv("GROK2API_WINDOWS_REGISTER_DIR")); env != "" {
 		outputDir = env
 	}
-	pythonPath := strings.TrimSpace(cfg.WindowsRegister.PythonPath)
-	if env := strings.TrimSpace(os.Getenv("GROK2API_REGISTER_PYTHON")); env != "" {
-		pythonPath = env
-	}
-	// Prefer absolute paths for process cwd/output stability.
-	if abs, err := filepath.Abs(enginePath); err == nil {
-		enginePath = abs
+	if browserPath != "" {
+		if abs, err := filepath.Abs(browserPath); err == nil {
+			browserPath = abs
+		}
 	}
 	if abs, err := filepath.Abs(outputDir); err == nil {
 		outputDir = abs
@@ -364,10 +358,10 @@ func newWindowsRegisterWorker(cfg config.Config) *windowsregisterinfra.Service {
 		enabled = false
 	}
 	return windowsregisterinfra.NewService(windowsregisterinfra.Config{
-		Enabled:    enabled,
-		EnginePath: enginePath,
-		OutputDir:  outputDir,
-		PythonPath: pythonPath,
+		Enabled:            enabled,
+		BrowserPath:        browserPath,
+		ManagedBrowserPath: filepath.Join(outputDir, "browser", "chrome.exe"),
+		OutputDir:          outputDir,
 	})
 }
 
