@@ -66,7 +66,9 @@ func resolveBuildSessionIdentity(clientKeyID uint64, provider accountdomain.Prov
 	firstUser = truncateAnchor(firstUser, 200)
 
 	if system != "" || toolsFingerprint != "" {
-		upstreamSource := fmt.Sprintf("grok2api:build-soft-prefix:%s:%d:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, system, toolsFingerprint)
+		// Keep both upstream session and account affinity model-scoped so multi-model
+		// clients do not share x-grok-conv-id / prompt_cache_key.
+		upstreamSource := fmt.Sprintf("grok2api:build-soft-prefix:%s:%d:%s:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, system, toolsFingerprint)
 		affinitySource := fmt.Sprintf("grok2api:build-soft-prefix-affinity:%s:%d:%s:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, system, toolsFingerprint)
 		return buildSessionIdentity{
 			upstreamID:  digestUUID(upstreamSource),
@@ -77,10 +79,9 @@ func resolveBuildSessionIdentity(clientKeyID uint64, provider accountdomain.Prov
 	if firstUser == "" {
 		return buildSessionIdentity{}
 	}
-	upstreamSource := fmt.Sprintf("grok2api:build-soft-session:%s:%d:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, firstUser)
+	// system/tools already handled above; fall back to first-user soft identity only.
+	upstreamSource := fmt.Sprintf("grok2api:build-soft-session:%s:%d:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, firstUser)
 	affinitySource := fmt.Sprintf("grok2api:build-soft-affinity:%s:%d:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, firstUser)
-	upstreamSource := fmt.Sprintf("grok2api:build-soft-session:%s:%d:%s:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, system, firstUser)
-	affinitySource := fmt.Sprintf("grok2api:build-soft-affinity:%s:%d:%s:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, system, firstUser)
 	return buildSessionIdentity{
 		upstreamID:  digestUUID(upstreamSource),
 		affinityKey: hexDigest(affinitySource),
