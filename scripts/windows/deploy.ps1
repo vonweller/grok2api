@@ -434,6 +434,59 @@ function Get-RegisterBrowserPath {
     return ""
 }
 
+# Import names for requirements.txt packages (python-dotenv imports as dotenv).
+function Get-RegisterRequiredPythonModules {
+    return @("cloakbrowser", "requests", "dotenv", "httpx", "playwright", "curl_cffi")
+}
+
+# Returns missing import names for the package-local virtualenv.
+function Get-MissingRegisterPythonModules {
+    if (-not (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf)) {
+        return ,(Get-RegisterRequiredPythonModules)
+    }
+    $modules = Get-RegisterRequiredPythonModules
+    $moduleList = ($modules | ForEach-Object { "'" + $_ + "'" }) -join ","
+    $probe = @"
+import importlib.util
+mods = [$moduleList]
+missing = [m for m in mods if importlib.util.find_spec(m) is None]
+print(','.join(missing))
+"@
+    try {
+        $output = & $RegisterPythonPath -c $probe 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            return ,$modules
+        }
+        $text = ([string]$output).Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            return @()
+        }
+        return @($text -split "," | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    catch {
+        return ,$modules
+    }
+}
+
+function Test-RegisterPythonPackagesReady {
+    $missing = @(Get-MissingRegisterPythonModules)
+    return ($missing.Count -eq 0)
+}
+
+function Write-RegisterBrowserMarker {
+    param([string]$BrowserPath)
+    if ([string]::IsNullOrWhiteSpace($BrowserPath)) {
+        return
+    }
+    try {
+        [System.IO.File]::WriteAllText($RegisterBrowserMarkerPath, $BrowserPath + [Environment]::NewLine, [Text.Encoding]::UTF8)
+    }
+    catch {
+        Write-WarningLine ("Could not write .browser-path ({0}). Continuing with discovered browser path." -f $_.Exception.Message)
+    }
+    $env:CLOAKBROWSER_EXECUTABLE_PATH = $BrowserPath
+}
+
 function Test-WindowsRegisterRuntimeReady {
     if (-not (Test-Path -LiteralPath (Join-Path $RegisterEnginePath "grok_register\register.py") -PathType Leaf)) {
         return $false
@@ -441,16 +494,112 @@ function Test-WindowsRegisterRuntimeReady {
     if (-not (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf)) {
         return $false
     }
+    if (-not (Test-RegisterPythonPackagesReady)) {
+        return $false
+    }
     $browser = Get-RegisterBrowserPath
     if ([string]::IsNullOrWhiteSpace($browser)) {
         return $false
     }
-    try {
-        & $RegisterPythonPath -c "import importlib.util,sys; mods=('playwright','cloakbrowser'); sys.exit(0 if all(importlib.util.find_spec(m) for m in mods) else 1)"
-        return ($LASTEXITCODE -eq 0)
+    return $true
+}
+
+function Install-RegisterPythonPackages {
+    param([string]$HostPython)
+
+    $venvDir = Join-Path $RegisterEnginePath ".venv"
+    if (-not (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf)) {
+        Write-Step "Creating register virtualenv..."
+        & $HostPython -m venv $venvDir
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf)) {
+            throw "Failed to create tools\windows-register\.venv. Check the Python installation."
+        }
     }
-    catch {
-        return $false
+
+    $requirements = Join-Path $RegisterEnginePath "requirements.txt"
+    if (-not (Test-Path -LiteralPath $requirements -PathType Leaf)) {
+        throw "Missing tools\windows-register\requirements.txt in the package."
+    }
+
+    Write-Step "Installing/repairing register Python dependencies from requirements.txt..."
+    # Always re-run pip install so half-broken venvs (missing cloakbrowser/playwright/etc.) self-heal.
+    & $RegisterPythonPath -m pip install --upgrade pip setuptools wheel
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to upgrade pip inside tools\windows-register\.venv."
+    }
+    & $RegisterPythonPath -m pip install --upgrade -r $requirements
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install tools\windows-register\requirements.txt. Ensure the machine can reach PyPI (or configure a mirror) and re-run deploy.bat install."
+    }
+
+    $missing = @(Get-MissingRegisterPythonModules)
+    if ($missing.Count -gt 0) {
+        throw ("Register Python packages still missing after pip install: {0}" -f ($missing -join ", "))
+    }
+    Write-Step "Register Python packages are installed: cloakbrowser, requests, python-dotenv, httpx, playwright, curl_cffi."
+}
+
+function Install-RegisterCloakBrowser {
+    $browser = Get-RegisterBrowserPath
+    if (-not [string]::IsNullOrWhiteSpace($browser) -and (Test-Path -LiteralPath $browser -PathType Leaf)) {
+        Write-RegisterBrowserMarker $browser
+        Write-Step ("CloakBrowser Chromium already present: {0}" -f $browser)
+        return $browser
+    }
+
+    $oldHome = $env:HOME
+    $oldUserProfile = $env:USERPROFILE
+    $oldLocalAppData = $env:LOCALAPPDATA
+    $oldPythonPath = $env:PYTHONPATH
+    $oldPythonUtf8 = $env:PYTHONUTF8
+    try {
+        # Install Chromium under the package tree so LOCAL SERVICE / scheduled tasks can read it.
+        $env:HOME = $RegisterEnginePath
+        $env:USERPROFILE = $RegisterEnginePath
+        $env:LOCALAPPDATA = Join-Path $RegisterEnginePath "AppData\Local"
+        $env:PYTHONPATH = $RegisterEnginePath
+        $env:PYTHONUTF8 = "1"
+        [System.IO.Directory]::CreateDirectory($env:LOCALAPPDATA) | Out-Null
+
+        Write-Step "Downloading CloakBrowser Chromium into the package (this may take several minutes)..."
+        & $RegisterPythonPath -m cloakbrowser install
+        if ($LASTEXITCODE -ne 0) {
+            throw "CloakBrowser Chromium installation failed. Check network access and re-run deploy.bat install."
+        }
+
+        $browserPath = ""
+        try {
+            $browserFromPython = & $RegisterPythonPath -c "from grok_register.register import find_chrome; print(find_chrome())" 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $browserPath = ([string]$browserFromPython).Trim()
+                if ($browserPath -match "[\r\n]") {
+                    $browserPath = (@($browserPath -split "[\r\n]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | Select-Object -Last 1).Trim()
+                }
+            }
+            else {
+                Write-WarningLine ("find_chrome() failed after install: {0}" -f (($browserFromPython | ForEach-Object { "$_" }) -join " "))
+            }
+        }
+        catch {
+            Write-WarningLine ("find_chrome() raised after install: {0}" -f $_.Exception.Message)
+        }
+
+        if ([string]::IsNullOrWhiteSpace($browserPath) -or -not (Test-Path -LiteralPath $browserPath -PathType Leaf)) {
+            $browserPath = Get-RegisterBrowserPath
+        }
+        if ([string]::IsNullOrWhiteSpace($browserPath) -or -not (Test-Path -LiteralPath $browserPath -PathType Leaf)) {
+            throw "CloakBrowser chrome.exe was not found after installation under tools\windows-register\.cloakbrowser."
+        }
+        Write-RegisterBrowserMarker $browserPath
+        Write-Step ("CloakBrowser Chromium ready: {0}" -f $browserPath)
+        return $browserPath
+    }
+    finally {
+        if ($null -eq $oldHome) { Remove-Item Env:HOME -ErrorAction SilentlyContinue } else { $env:HOME = $oldHome }
+        if ($null -eq $oldUserProfile) { Remove-Item Env:USERPROFILE -ErrorAction SilentlyContinue } else { $env:USERPROFILE = $oldUserProfile }
+        if ($null -eq $oldLocalAppData) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $oldLocalAppData }
+        if ($null -eq $oldPythonPath) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $oldPythonPath }
+        if ($null -eq $oldPythonUtf8) { Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue } else { $env:PYTHONUTF8 = $oldPythonUtf8 }
     }
 }
 
@@ -469,128 +618,45 @@ function Ensure-WindowsRegisterRuntime {
 
     if (Test-WindowsRegisterRuntimeReady) {
         $browser = Get-RegisterBrowserPath
-        if (-not [string]::IsNullOrWhiteSpace($browser)) {
-            $needsMarker = $true
-            if (Test-Path -LiteralPath $RegisterBrowserMarkerPath -PathType Leaf) {
-                $existing = ([System.IO.File]::ReadAllText($RegisterBrowserMarkerPath)).Trim().Trim('"')
-                if ($existing -eq $browser) {
-                    $needsMarker = $false
-                }
-            }
-            if ($needsMarker) {
-                try {
-                    [System.IO.File]::WriteAllText($RegisterBrowserMarkerPath, $browser + [Environment]::NewLine, [Text.Encoding]::UTF8)
-                }
-                catch {
-                    # LOCAL SERVICE / locked package trees may not allow rewriting the marker.
-                    Write-WarningLine ("Could not refresh .browser-path ({0}). Continuing with discovered browser path." -f $_.Exception.Message)
-                }
-            }
-        }
-        Write-Step "Windows register runtime is ready."
+        Write-RegisterBrowserMarker $browser
+        Write-Step "Windows register runtime is ready (venv packages + CloakBrowser Chromium)."
         return
     }
 
     if (-not (Test-RegisterEngineWritable)) {
         Write-WarningLine "Windows register runtime is incomplete and tools\windows-register is not writable. Run deploy.bat install from an elevated prompt, or extract the package to a user-writable folder."
         if ($Required) {
-            throw "Windows register runtime is not ready."
+            throw "Windows register runtime is not ready (package directory not writable)."
         }
         return
     }
     if (-not (Test-IsAdministratorAccount)) {
-        Write-WarningLine "Current process is not elevated. Attempting local register runtime setup in the package folder..."
+        Write-WarningLine "Current process is not elevated. Attempting automatic register runtime setup in the package folder..."
     }
 
     $hostPython = Resolve-HostPython
     if ([string]::IsNullOrWhiteSpace($hostPython)) {
-        Write-WarningLine "Python 3.10+ was not found. Install Python from https://www.python.org/downloads/ (enable Add python.exe to PATH), then re-run deploy.bat install. Core API features remain available; only Windows registration needs Python/Playwright/CloakBrowser."
+        Write-WarningLine "Python 3.10+ was not found. Install Python from https://www.python.org/downloads/ (enable Add python.exe to PATH), then re-run deploy.bat install."
+        Write-WarningLine "Core API still works. Only Windows browser registration needs Python + requirements.txt + CloakBrowser."
         if ($Required) {
             throw "Python 3.10+ is required for the Windows registration worker."
         }
         return
     }
 
-    Write-Step "Preparing Windows register runtime (Python + Playwright + CloakBrowser)..."
-    $venvDir = Join-Path $RegisterEnginePath ".venv"
-    if (-not (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf)) {
-        Write-Step "Creating register virtualenv..."
-        & $hostPython -m venv $venvDir
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $RegisterPythonPath -PathType Leaf)) {
-            throw "Failed to create tools\windows-register\.venv. Check the Python installation."
-        }
-    }
-
-    Write-Step "Installing register Python dependencies..."
-    & $RegisterPythonPath -m pip install --upgrade pip setuptools wheel
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to upgrade pip inside the register virtualenv."
-    }
-    $requirements = Join-Path $RegisterEnginePath "requirements.txt"
-    & $RegisterPythonPath -m pip install -r $requirements
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to install tools\windows-register\requirements.txt."
-    }
-
-    # Install Chromium under the package tree so LOCAL SERVICE can read it.
-    $oldHome = $env:HOME
-    $oldUserProfile = $env:USERPROFILE
-    $oldLocalAppData = $env:LOCALAPPDATA
-    $oldPythonPath = $env:PYTHONPATH
-    $oldPythonUtf8 = $env:PYTHONUTF8
-    try {
-        $env:HOME = $RegisterEnginePath
-        $env:USERPROFILE = $RegisterEnginePath
-        $env:LOCALAPPDATA = Join-Path $RegisterEnginePath "AppData\Local"
-        # grok_register is a plain package under tools/windows-register; Python must see that root.
-        $env:PYTHONPATH = $RegisterEnginePath
-        $env:PYTHONUTF8 = "1"
-        [System.IO.Directory]::CreateDirectory($env:LOCALAPPDATA) | Out-Null
-        Write-Step "Installing CloakBrowser Chromium into the package..."
-        & $RegisterPythonPath -m cloakbrowser install
-        if ($LASTEXITCODE -ne 0) {
-            throw "CloakBrowser Chromium installation failed."
-        }
-
-        $browserPath = ""
-        try {
-            # Resolve chrome via the same helper the registration worker uses.
-            $browserFromPython = & $RegisterPythonPath -c "from grok_register.register import find_chrome; print(find_chrome())" 2>&1
-            if ($LASTEXITCODE -eq 0) {
-                $browserPath = ([string]$browserFromPython).Trim()
-                if ($browserPath -match "[\r\n]") {
-                    $browserPath = (@($browserPath -split "[\r\n]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | Select-Object -Last 1).Trim()
-                }
-            }
-            else {
-                Write-WarningLine ("Register engine find_chrome() failed after CloakBrowser install: {0}" -f (($browserFromPython | ForEach-Object { "$_" }) -join " "))
-            }
-        }
-        catch {
-            Write-WarningLine ("Register engine find_chrome() raised after CloakBrowser install: {0}" -f $_.Exception.Message)
-        }
-
-        if ([string]::IsNullOrWhiteSpace($browserPath) -or -not (Test-Path -LiteralPath $browserPath -PathType Leaf)) {
-            $browserPath = Get-RegisterBrowserPath
-        }
-        if ([string]::IsNullOrWhiteSpace($browserPath) -or -not (Test-Path -LiteralPath $browserPath -PathType Leaf)) {
-            throw "CloakBrowser chrome.exe was not found after installation. Check tools\windows-register\.cloakbrowser and re-run deploy.bat install."
-        }
-        [System.IO.File]::WriteAllText($RegisterBrowserMarkerPath, $browserPath + [Environment]::NewLine, [Text.Encoding]::UTF8)
-        $env:CLOAKBROWSER_EXECUTABLE_PATH = $browserPath
-    }
-    finally {
-        if ($null -eq $oldHome) { Remove-Item Env:HOME -ErrorAction SilentlyContinue } else { $env:HOME = $oldHome }
-        if ($null -eq $oldUserProfile) { Remove-Item Env:USERPROFILE -ErrorAction SilentlyContinue } else { $env:USERPROFILE = $oldUserProfile }
-        if ($null -eq $oldLocalAppData) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $oldLocalAppData }
-        if ($null -eq $oldPythonPath) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $oldPythonPath }
-        if ($null -eq $oldPythonUtf8) { Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue } else { $env:PYTHONUTF8 = $oldPythonUtf8 }
-    }
+    Write-Step ("Preparing Windows register runtime with host Python: {0}" -f $hostPython)
+    Install-RegisterPythonPackages -HostPython $hostPython
+    [void](Install-RegisterCloakBrowser)
 
     if (-not (Test-WindowsRegisterRuntimeReady)) {
-        throw "Windows register runtime is still incomplete after setup."
+        $missing = @(Get-MissingRegisterPythonModules)
+        $browser = Get-RegisterBrowserPath
+        $detail = @()
+        if ($missing.Count -gt 0) { $detail += ("missing packages: " + ($missing -join ", ")) }
+        if ([string]::IsNullOrWhiteSpace($browser)) { $detail += "browser not found" }
+        throw ("Windows register runtime is still incomplete after automatic setup. {0}" -f ($detail -join "; "))
     }
-    Write-Step "Windows register runtime prepared."
+    Write-Step "Windows register runtime prepared automatically. No manual cloakbrowser install is required."
 }
 
 function Set-WindowsRegisterProcessEnvironment {
@@ -1207,13 +1273,21 @@ try {
             Start-Application $Port
             if (Test-WindowsRegisterRuntimeReady) {
                 Write-Step "Windows registration worker is ready in the admin UI under Registration."
+                Write-Step "Python packages + CloakBrowser were prepared automatically under tools\windows-register\.venv."
             }
             else {
-                # 注册机依赖故意不打进 ZIP（体积大、含运行时缓存），需在目标机现装。
-                # 核心 API 不受影响；仅 Windows 浏览器注册功能需要 Python 3.10+ 与首次联网。
+                # ZIP does not ship .venv/browser binaries (too large). deploy.bat must auto-install them on the target PC.
+                # Core API is unaffected; only Windows browser registration needs Python + PyPI once.
+                $missing = @(Get-MissingRegisterPythonModules)
                 Write-WarningLine "Core service started, but Windows registration runtime is not ready."
-                Write-WarningLine "Missing packages such as Playwright/CloakBrowser mean tools\windows-register\.venv was not prepared on this machine."
-                Write-WarningLine "Fix: install Python 3.10+ with PATH enabled, ensure outbound access to PyPI, then re-run deploy.bat install (or tools\windows-register\setup.ps1)."
+                if ($missing.Count -gt 0) {
+                    Write-WarningLine ("Missing Python packages in .venv: {0}" -f ($missing -join ", "))
+                }
+                if ([string]::IsNullOrWhiteSpace((Get-RegisterBrowserPath))) {
+                    Write-WarningLine "CloakBrowser Chromium binary was not found under tools\windows-register\.cloakbrowser."
+                }
+                Write-WarningLine "Fix once: install Python 3.10+ (Add to PATH), ensure PyPI network access, then re-run deploy.bat install."
+                Write-WarningLine "Do NOT run cloakbrowser install by hand unless automatic setup failed; deploy.bat is supposed to do it."
             }
         }
     }
