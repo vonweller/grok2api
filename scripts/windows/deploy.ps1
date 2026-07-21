@@ -540,11 +540,18 @@ function Install-RegisterPythonPackages {
 }
 
 function Install-RegisterCloakBrowser {
+    # Only accept a package-local browser. User-profile installs are invisible to LOCAL SERVICE.
     $browser = Get-RegisterBrowserPath
-    if (-not [string]::IsNullOrWhiteSpace($browser) -and (Test-Path -LiteralPath $browser -PathType Leaf)) {
+    if (-not [string]::IsNullOrWhiteSpace($browser) -and
+        (Test-Path -LiteralPath $browser -PathType Leaf) -and
+        (Test-PathUnderRoot $browser $RegisterEnginePath)) {
         Write-RegisterBrowserMarker $browser
-        Write-Step ("CloakBrowser Chromium already present: {0}" -f $browser)
+        Write-Step ("CloakBrowser Chromium already present in package: {0}" -f $browser)
         return $browser
+    }
+    $userBrowser = Get-RegisterBrowserPath -AllowUserProfile
+    if (-not [string]::IsNullOrWhiteSpace($userBrowser) -and -not (Test-PathUnderRoot $userBrowser $RegisterEnginePath)) {
+        Write-WarningLine ("Found interactive-user CloakBrowser at {0}; installing a package-local copy for LOCAL SERVICE." -f $userBrowser)
     }
 
     $oldHome = $env:HOME
@@ -584,14 +591,18 @@ function Install-RegisterCloakBrowser {
             Write-WarningLine ("find_chrome() raised after install: {0}" -f $_.Exception.Message)
         }
 
-        if ([string]::IsNullOrWhiteSpace($browserPath) -or -not (Test-Path -LiteralPath $browserPath -PathType Leaf)) {
+        if ([string]::IsNullOrWhiteSpace($browserPath) -or
+            -not (Test-Path -LiteralPath $browserPath -PathType Leaf) -or
+            -not (Test-PathUnderRoot $browserPath $RegisterEnginePath)) {
             $browserPath = Get-RegisterBrowserPath
         }
-        if ([string]::IsNullOrWhiteSpace($browserPath) -or -not (Test-Path -LiteralPath $browserPath -PathType Leaf)) {
-            throw "CloakBrowser chrome.exe was not found after installation under tools\windows-register\.cloakbrowser."
+        if ([string]::IsNullOrWhiteSpace($browserPath) -or
+            -not (Test-Path -LiteralPath $browserPath -PathType Leaf) -or
+            -not (Test-PathUnderRoot $browserPath $RegisterEnginePath)) {
+            throw "CloakBrowser chrome.exe was not found under tools\windows-register after installation. LOCAL SERVICE cannot use C:\Users\... paths."
         }
         Write-RegisterBrowserMarker $browserPath
-        Write-Step ("CloakBrowser Chromium ready: {0}" -f $browserPath)
+        Write-Step ("CloakBrowser Chromium ready (package-local): {0}" -f $browserPath)
         return $browserPath
     }
     finally {
@@ -850,7 +861,7 @@ function Assert-PortAvailable {
 }
 
 function Wait-ForHealth {
-    param([int]$Value, [int]$TimeoutSeconds = 45)
+    param([int]$Value, [int]$TimeoutSeconds = 90)
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
         if (Test-Health $Value) {
@@ -862,11 +873,51 @@ function Wait-ForHealth {
 }
 
 function Show-RecentErrors {
-    if (Test-Path -LiteralPath $StderrPath -PathType Leaf) {
-        Write-Host ""
-        Write-Host "Last error log lines:"
-        Get-Content -LiteralPath $StderrPath -Tail 30
+    Write-Host ""
+    Write-Host "----- deployment diagnostics -----" -ForegroundColor Yellow
+    $task = $null
+    try { $task = Get-ServiceTask } catch { $task = $null }
+    if ($null -ne $task) {
+        try {
+            $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+            if ($null -ne $info) {
+                Write-Host ("Task state={0} lastResult={1} lastRun={2}" -f $task.State, $info.LastTaskResult, $info.LastRunTime)
+            }
+            else {
+                Write-Host ("Task state={0}" -f $task.State)
+            }
+        }
+        catch {
+            Write-Host ("Task state={0}" -f $task.State)
+        }
     }
+    else {
+        Write-Host "Startup task is missing."
+    }
+    $proc = Get-ManagedProcess
+    if ($null -ne $proc) {
+        Write-Host ("Managed process PID={0}" -f $proc.Id)
+    }
+    else {
+        Write-Host "No managed grok2api.exe process was found."
+    }
+    foreach ($pair in @(
+        @("stderr", $StderrPath),
+        @("stdout", $StdoutPath),
+        @("task", $TaskLogPath)
+    )) {
+        $label = $pair[0]
+        $path = $pair[1]
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Write-Host ""
+            Write-Host ("Last {0} log lines ({1}):" -f $label, $path)
+            Get-Content -LiteralPath $path -Tail 40
+        }
+        else {
+            Write-Host ("No {0} log yet: {1}" -f $label, $path)
+        }
+    }
+    Write-Host "----- end diagnostics -----" -ForegroundColor Yellow
 }
 
 function Rotate-LogFile {
@@ -1113,10 +1164,16 @@ function Start-Application {
         throw "The startup task is not installed. Run deploy.bat install [port] first."
     }
     Save-Port $Value
+    # Ensure writable runtime dirs exist before LOCAL SERVICE starts.
+    [System.IO.Directory]::CreateDirectory($DataPath) | Out-Null
+    [System.IO.Directory]::CreateDirectory($LogsPath) | Out-Null
+    [System.IO.Directory]::CreateDirectory($RegisterOutputPath) | Out-Null
+    Set-WindowsRegisterProcessEnvironment
+    Write-Step ("Starting scheduled task '{0}' on port {1}..." -f $TaskName, $Value)
     Start-ScheduledTask -TaskName $TaskName
-    if (-not (Wait-ForHealth $Value)) {
+    if (-not (Wait-ForHealth $Value 90)) {
         Show-RecentErrors
-        throw "The process did not pass /healthz within 45 seconds."
+        throw "The process did not pass /healthz within 90 seconds. Check logs above (often LOCAL SERVICE ACL, config, or port conflict)."
     }
     $process = Get-ManagedProcess
     if ($null -eq $process) {
