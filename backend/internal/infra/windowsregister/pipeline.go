@@ -85,6 +85,7 @@ func (p Pipeline) Run(parent context.Context, options PipelineOptions) error {
 	challengeQueue := make(chan ChallengeToken, options.QueueSize)
 	mailQueue := make(chan VerifiedMailbox, options.QueueSize)
 	targetReached := make(chan struct{})
+	fatalErrors := make(chan error, 1)
 	var targetOnce sync.Once
 	var successes atomic.Int64
 	circuit := &rateLimitCircuit{cooldown: options.RateLimitCooldown, observer: observer}
@@ -92,7 +93,7 @@ func (p Pipeline) Run(parent context.Context, options PipelineOptions) error {
 	var challengeGroup errgroup.Group
 	for range options.SWorkers {
 		challengeGroup.Go(func() error {
-			produceChallenges(ctx, p.Challenges, observer, challengeQueue)
+			produceChallenges(ctx, p.Challenges, observer, challengeQueue, fatalErrors)
 			return nil
 		})
 	}
@@ -106,7 +107,7 @@ func (p Pipeline) Run(parent context.Context, options PipelineOptions) error {
 	var mailGroup errgroup.Group
 	for range options.PWorkers {
 		mailGroup.Go(func() error {
-			produceMail(ctx, p.Mail, observer, mailQueue)
+			produceMail(ctx, p.Mail, observer, mailQueue, fatalErrors)
 			return nil
 		})
 	}
@@ -120,7 +121,7 @@ func (p Pipeline) Run(parent context.Context, options PipelineOptions) error {
 	var accountGroup errgroup.Group
 	for range options.CWorkers {
 		accountGroup.Go(func() error {
-			consumeAccounts(ctx, p.Accounts, observer, circuit, challengeQueue, mailQueue, options.Target, &successes, func() {
+			consumeAccounts(ctx, p.Accounts, observer, circuit, challengeQueue, mailQueue, fatalErrors, options.Target, &successes, func() {
 				targetOnce.Do(func() {
 					close(targetReached)
 					cancel()
@@ -135,8 +136,11 @@ func (p Pipeline) Run(parent context.Context, options PipelineOptions) error {
 		close(accountDone)
 	}()
 
+	var fatalErr error
 	select {
 	case <-targetReached:
+	case fatalErr = <-fatalErrors:
+		cancel()
 	case <-parent.Done():
 		cancel()
 	case <-accountDone:
@@ -147,6 +151,9 @@ func (p Pipeline) Run(parent context.Context, options PipelineOptions) error {
 	<-accountDone
 	if successes.Load() >= int64(options.Target) {
 		return nil
+	}
+	if fatalErr != nil {
+		return fatalErr
 	}
 	if parent.Err() != nil {
 		return parent.Err()
@@ -181,11 +188,14 @@ func normalizedPipelineOptions(options PipelineOptions) (PipelineOptions, error)
 	return options, nil
 }
 
-func produceChallenges(ctx context.Context, producer ChallengeProducer, observer RunObserver, output chan<- ChallengeToken) {
+func produceChallenges(ctx context.Context, producer ChallengeProducer, observer RunObserver, output chan<- ChallengeToken, fatal chan<- error) {
 	for {
 		item, err := producer.Produce(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
+				return
+			}
+			if reportPipelineFatal(fatal, err) {
 				return
 			}
 			observer.Failure(err)
@@ -202,11 +212,14 @@ func produceChallenges(ctx context.Context, producer ChallengeProducer, observer
 	}
 }
 
-func produceMail(ctx context.Context, producer MailProducer, observer RunObserver, output chan<- VerifiedMailbox) {
+func produceMail(ctx context.Context, producer MailProducer, observer RunObserver, output chan<- VerifiedMailbox, fatal chan<- error) {
 	for {
 		item, err := producer.Produce(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
+				return
+			}
+			if reportPipelineFatal(fatal, err) {
 				return
 			}
 			observer.Failure(err)
@@ -223,7 +236,7 @@ func produceMail(ctx context.Context, producer MailProducer, observer RunObserve
 	}
 }
 
-func consumeAccounts(ctx context.Context, consumer AccountConsumer, observer RunObserver, circuit *rateLimitCircuit, challenges <-chan ChallengeToken, mail <-chan VerifiedMailbox, target int, successes *atomic.Int64, reached func()) {
+func consumeAccounts(ctx context.Context, consumer AccountConsumer, observer RunObserver, circuit *rateLimitCircuit, challenges <-chan ChallengeToken, mail <-chan VerifiedMailbox, fatal chan<- error, target int, successes *atomic.Int64, reached func()) {
 	for {
 		challenge, ok := receiveChallenge(ctx, challenges)
 		if !ok {
@@ -240,6 +253,9 @@ func consumeAccounts(ctx context.Context, consumer AccountConsumer, observer Run
 			record, err := consumer.Consume(ctx, challenge, mailbox)
 			if err != nil {
 				if ctx.Err() != nil {
+					return
+				}
+				if reportPipelineFatal(fatal, err) {
 					return
 				}
 				if errors.Is(err, ErrRateLimited) {
@@ -259,6 +275,17 @@ func consumeAccounts(ctx context.Context, consumer AccountConsumer, observer Run
 			break
 		}
 	}
+}
+
+func reportPipelineFatal(output chan<- error, err error) bool {
+	if !errors.Is(err, ErrBrowserCrashed) {
+		return false
+	}
+	select {
+	case output <- err:
+	default:
+	}
+	return true
 }
 
 func receiveChallenge(ctx context.Context, input <-chan ChallengeToken) (ChallengeToken, bool) {

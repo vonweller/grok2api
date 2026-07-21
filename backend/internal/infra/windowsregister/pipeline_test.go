@@ -181,3 +181,17 @@ func TestPipelineCancellationBypassesRateLimitCooldown(t *testing.T) {
 		t.Fatal("cooldown ignored cancellation")
 	}
 }
+
+type crashingChallengeProducer struct{}
+
+func (crashingChallengeProducer) Produce(context.Context) (ChallengeToken, error) {
+	return ChallengeToken{}, ErrBrowserCrashed
+}
+
+func TestPipelinePropagatesBrowserCrash(t *testing.T) {
+	pipeline := Pipeline{Challenges: crashingChallengeProducer{}, Mail: &fakeMail{}, Accounts: &fakeAccounts{}}
+	err := pipeline.Run(t.Context(), PipelineOptions{Target: 1})
+	if !errors.Is(err, ErrBrowserCrashed) {
+		t.Fatalf("error = %v, want ErrBrowserCrashed", err)
+	}
+}

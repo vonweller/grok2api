@@ -12,10 +12,12 @@ type scriptedBrowserPage struct {
 	expressions []string
 	arguments   [][]any
 	results     []json.RawMessage
+	html        string
 	cookies     []BrowserCookie
 	navigated   []string
 	closed      bool
 	clicks      int
+	evaluateErr error
 }
 
 func (p *scriptedBrowserPage) Navigate(_ context.Context, rawURL string) error {
@@ -23,17 +25,28 @@ func (p *scriptedBrowserPage) Navigate(_ context.Context, rawURL string) error {
 	return nil
 }
 
-func (p *scriptedBrowserPage) HTML(context.Context) (string, error) { return "", nil }
+func (p *scriptedBrowserPage) HTML(context.Context) (string, error) { return p.html, nil }
 
 func (p *scriptedBrowserPage) Evaluate(_ context.Context, expression string, args ...any) (json.RawMessage, error) {
 	p.expressions = append(p.expressions, expression)
 	p.arguments = append(p.arguments, args)
+	if p.evaluateErr != nil {
+		return nil, p.evaluateErr
+	}
 	if len(p.results) == 0 {
 		return json.RawMessage(`null`), nil
 	}
 	result := p.results[0]
 	p.results = p.results[1:]
 	return result, nil
+}
+
+func TestSignupBrowserEvaluationFailureIsFatal(t *testing.T) {
+	page := &scriptedBrowserPage{evaluateErr: errors.New("cdp disconnected")}
+	client := NewSignupClient(page, SignupConfig{})
+	if err := client.SendCode(t.Context(), "u@x.test"); !errors.Is(err, ErrBrowserCrashed) {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func (p *scriptedBrowserPage) Cookies(context.Context) ([]BrowserCookie, error) {

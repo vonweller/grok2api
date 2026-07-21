@@ -36,3 +36,12 @@ func TestTurnstileSolverTimesOutAndClosesPage(t *testing.T) {
 		t.Fatalf("error = %v closed = %v", err, page.closed)
 	}
 }
+
+func TestTurnstileBrowserFailureIsFatal(t *testing.T) {
+	page := &scriptedBrowserPage{evaluateErr: errors.New("cdp disconnected")}
+	solver := TurnstileSolver{HardTimeout: time.Second}
+	_, err := solver.Solve(t.Context(), page, "0x4AAAAAAAtest")
+	if !errors.Is(err, ErrBrowserCrashed) || !page.closed {
+		t.Fatalf("error = %v closed = %v", err, page.closed)
+	}
+}

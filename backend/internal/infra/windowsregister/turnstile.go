@@ -44,12 +44,18 @@ func (s TurnstileSolver) Solve(ctx context.Context, page BrowserPage, siteKey st
 	solveContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if _, err := page.Evaluate(solveContext, injectTurnstileScript, map[string]string{"siteKey": siteKey}); err != nil {
-		return "", turnstileContextError(ctx, solveContext)
+		if ctx.Err() != nil || solveContext.Err() != nil {
+			return "", turnstileContextError(ctx, solveContext)
+		}
+		return "", ErrBrowserCrashed
 	}
 	for {
 		raw, err := page.Evaluate(solveContext, readTurnstileScript)
 		if err != nil {
-			return "", turnstileContextError(ctx, solveContext)
+			if ctx.Err() != nil || solveContext.Err() != nil {
+				return "", turnstileContextError(ctx, solveContext)
+			}
+			return "", ErrBrowserCrashed
 		}
 		var token string
 		if json.Unmarshal(raw, &token) != nil || len(token) > 4096 {

@@ -153,7 +153,7 @@ func (c *SignupClient) fetch(ctx context.Context, args browserFetchArgs) (browse
 		if ctx.Err() != nil {
 			return browserFetchResponse{}, ctx.Err()
 		}
-		return browserFetchResponse{}, ErrSignupResponse
+		return browserFetchResponse{}, ErrBrowserCrashed
 	}
 	if len(raw) > maxSignupResponseBytes+4096 {
 		return browserFetchResponse{}, ErrSignupResponse
