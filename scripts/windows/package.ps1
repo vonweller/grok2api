@@ -536,6 +536,9 @@ function Assert-NoPrivatePackageContent {
     param([string]$StagePath)
     foreach ($item in Get-ChildItem -LiteralPath $StagePath -Recurse -Force) {
         $relative = $item.FullName.Substring($StagePath.Length).TrimStart("\").Replace("\", "/")
+        if ($relative -match "(?i)(^|/)tools/windows-register(/|$)") {
+            throw "Forbidden legacy registration engine entered the package: $relative"
+        }
         if ($relative -match "(?i)(^|/)(config\.yaml|data|logs|node_modules|\.git|\.venv|keys|AppData|\.cloakbrowser)(/|$)") {
             throw "Forbidden private/runtime content entered the package: $relative"
         }
@@ -548,62 +551,10 @@ function Assert-NoPrivatePackageContent {
         if ($containsForbiddenEnvironmentFile) {
             throw "Forbidden private/runtime content entered the package: $relative"
         }
-        if (-not $item.PSIsContainer -and $item.Name -match "(?i)(\.(db|sqlite|sqlite3|log|pem|pfx|p12|key|map|pyc)|-wal|-shm)$") {
+        if (-not $item.PSIsContainer -and
+            ($item.Name -match "(?i)(\.(db|sqlite|sqlite3|log|pem|pfx|p12|key|map|py|pyc)|-wal|-shm)$" -or
+             $item.Name -match "(?i)^requirements\.txt$")) {
             throw "Forbidden private/runtime file entered the package: $relative"
-        }
-    }
-}
-
-function Copy-WindowsRegisterEngine {
-    param(
-        [string]$SourceRoot,
-        [string]$DestinationRoot
-    )
-    if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
-        throw "Windows register engine source is missing: $SourceRoot"
-    }
-    [System.IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
-    $excludeDirNames = @(
-        ".venv",
-        "keys",
-        "logs",
-        "__pycache__",
-        ".pytest_cache",
-        ".git",
-        "AppData",
-        ".cloakbrowser",
-        "browser"
-    )
-    Get-ChildItem -LiteralPath $SourceRoot -Force | ForEach-Object {
-        $name = $_.Name
-        if ($_.PSIsContainer -and ($excludeDirNames -contains $name)) {
-            return
-        }
-        if (-not $_.PSIsContainer -and $name -match "(?i)^(\.env|\.browser-path)$") {
-            return
-        }
-        $target = Join-Path $DestinationRoot $name
-        if ($_.PSIsContainer) {
-            Copy-Item -LiteralPath $_.FullName -Destination $target -Recurse -Force
-            Get-ChildItem -LiteralPath $target -Recurse -Force -Directory -ErrorAction SilentlyContinue |
-                Where-Object { $excludeDirNames -contains $_.Name } |
-                ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-            Get-ChildItem -LiteralPath $target -Recurse -Force -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.Extension -match "(?i)^\.(pyc|pyo)$" -or $_.Name -eq ".env" } |
-                ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
-        }
-        else {
-            Copy-Item -LiteralPath $_.FullName -Destination $target -Force
-        }
-    }
-    $required = @(
-        (Join-Path $DestinationRoot "grok_register\register.py"),
-        (Join-Path $DestinationRoot "requirements.txt"),
-        (Join-Path $DestinationRoot "setup.ps1")
-    )
-    foreach ($path in $required) {
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw "Packaged Windows register engine is incomplete; missing $path"
         }
     }
 }
@@ -714,11 +665,6 @@ function New-WindowsPackage {
     [System.IO.File]::WriteAllText($deploymentDocPath, $deploymentDocContent, (New-Object Text.UTF8Encoding($true)))
     [System.IO.File]::WriteAllText((Join-Path $stagePath "PACKAGE_PLATFORM"), "windows/$TargetArchitecture`r`n", [Text.Encoding]::ASCII)
 
-    $registerSource = Join-Path $ProjectRoot "tools\windows-register"
-    $registerDestination = Join-Path $stagePath "tools\windows-register"
-    Write-Step "Packaging Windows register engine..."
-    Copy-WindowsRegisterEngine -SourceRoot $registerSource -DestinationRoot $registerDestination
-
     $buildInfo = @(
         "Grok2API: $Version",
         "Platform: windows/$TargetArchitecture",
@@ -727,7 +673,7 @@ function New-WindowsPackage {
         "Go: $(Get-GoVersion $GoPath)",
         "Node.js: $NodeVersion",
         "pnpm: $PnpmVersion",
-        "Windows register engine: tools/windows-register (Python runtime not bundled)"
+        "Windows register engine: native Go (external Chromium)"
     )
     [System.IO.File]::WriteAllLines((Join-Path $stagePath "BUILDINFO.txt"), $buildInfo, [Text.Encoding]::ASCII)
     Write-PackageChecksums $stagePath

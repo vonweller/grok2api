@@ -48,10 +48,3 @@ Thumbs.db
 /.tools/
 /.tmp/
 /tmp/
-
-# Windows register engine runtime
-/tools/windows-register/.venv/
-/tools/windows-register/keys/
-/tools/windows-register/logs/
-/tools/windows-register/.env
-/tools/windows-register/**/__pycache__/

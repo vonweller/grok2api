@@ -1,7 +1,0 @@
-cloakbrowser>=0.3.0
-requests>=2.31.0
-python-dotenv>=1.0.0
-httpx>=0.28
-playwright>=1.55
-curl_cffi>=0.7.0
-async-timeout>=4.0; python_version < "3.11"
