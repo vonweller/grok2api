@@ -6,5 +6,10 @@
 </head>
 <body>
   <main id="fixture">native browser fixture</main>
+  <button id="click-target" type="button">click</button>
+  <script>
+    window.fixtureClicks = 0;
+    document.querySelector('#click-target').addEventListener('click', () => window.fixtureClicks++);
+  </script>
 </body>
 </html>

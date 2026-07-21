@@ -133,6 +133,20 @@ func (p *rodPage) Cookies(ctx context.Context) ([]BrowserCookie, error) {
 	return result, nil
 }
 
+func (p *rodPage) Click(ctx context.Context, x, y float64) error {
+	page := p.page.Context(ctx)
+	for _, event := range []proto.InputDispatchMouseEvent{
+		{Type: proto.InputDispatchMouseEventTypeMouseMoved, X: x, Y: y},
+		{Type: proto.InputDispatchMouseEventTypeMousePressed, X: x, Y: y, Button: proto.InputMouseButtonLeft, ClickCount: 1},
+		{Type: proto.InputDispatchMouseEventTypeMouseReleased, X: x, Y: y, Button: proto.InputMouseButtonLeft, ClickCount: 1},
+	} {
+		if err := event.Call(page); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *rodPage) Close() error {
 	p.close.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), browserCloseTimeout)

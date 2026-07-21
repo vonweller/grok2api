@@ -1,6 +1,7 @@
 package windowsregister
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,6 +43,25 @@ func TestRodBrowserFixture(t *testing.T) {
 	}
 	if len(cookies) != 1 || cookies[0].Name != "fixture" || cookies[0].Value != "ready" {
 		t.Fatalf("cookies = %#v", cookies)
+	}
+	centerRaw, err := page.Evaluate(t.Context(), `() => { const r = document.querySelector('#click-target').getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; }`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var center struct{ X, Y float64 }
+	if err := json.Unmarshal(centerRaw, &center); err != nil {
+		t.Fatal(err)
+	}
+	clicker, ok := page.(browserPageClicker)
+	if !ok {
+		t.Fatal("browser page does not support coordinate clicks")
+	}
+	if err := clicker.Click(t.Context(), center.X, center.Y); err != nil {
+		t.Fatal(err)
+	}
+	clicks, err := page.Evaluate(t.Context(), `() => window.fixtureClicks`)
+	if err != nil || string(clicks) != "1" {
+		t.Fatalf("click count = %s, error = %v", clicks, err)
 	}
 }
 
