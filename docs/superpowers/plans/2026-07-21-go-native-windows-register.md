@@ -363,13 +363,13 @@ git commit -m "feat: port registration protocol discovery to Go"
 func TestCustomEmailProviderCreateAndPoll(t *testing.T) {
     server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         switch r.URL.Path {
-        case "/create": json.NewEncoder(w).Encode(map[string]string{"email":"user@example.test"})
         case "/check/user@example.test": json.NewEncoder(w).Encode(map[string]string{"code":"123456"})
         default: http.NotFound(w, r)
         }
     }))
     defer server.Close()
     provider := NewCustomEmailProvider(server.URL, "example.test", server.Client())
+    provider.addressSource = func(string) (string, error) { return "user@example.test", nil }
     mailbox, err := provider.Create(t.Context())
     if err != nil { t.Fatal(err) }
     code, err := provider.PollCode(t.Context(), mailbox)
