@@ -812,32 +812,256 @@ function Save-Port {
     [System.IO.File]::WriteAllText($PortPath, $Value.ToString(), [Text.Encoding]::ASCII)
 }
 
-function Get-ManagedProcess {
-    if (-not (Test-Path -LiteralPath $PidPath -PathType Leaf)) {
-        return $null
-    }
-    $processId = 0
-    $raw = ([System.IO.File]::ReadAllText($PidPath)).Trim()
-    if (-not [int]::TryParse($raw, [ref]$processId)) {
-        Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
-        return $null
-    }
-    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
-    if ($null -eq $process) {
-        Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
+function Get-ProcessExecutablePath {
+    param([System.Diagnostics.Process]$Process)
+    if ($null -eq $Process) {
         return $null
     }
     try {
-        $actualPath = [System.IO.Path]::GetFullPath($process.Path)
+        if (-not [string]::IsNullOrWhiteSpace($Process.Path)) {
+            return [System.IO.Path]::GetFullPath($Process.Path)
+        }
+    }
+    catch {
+        # Process.Path is often denied for processes owned by LOCAL SERVICE when queried as admin.
+    }
+    try {
+        $cim = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = {0}" -f [int]$Process.Id) -ErrorAction Stop
+        if ($null -ne $cim -and -not [string]::IsNullOrWhiteSpace([string]$cim.ExecutablePath)) {
+            return [System.IO.Path]::GetFullPath([string]$cim.ExecutablePath)
+        }
+    }
+    catch {
+        # Fall through to null when the process image path cannot be resolved.
+    }
+    return $null
+}
+
+function Test-IsThisDeploymentExecutable {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $false
+    }
+    try {
+        $actual = [System.IO.Path]::GetFullPath($Path)
+        $expected = [System.IO.Path]::GetFullPath($ExecutablePath)
+        return $actual.Equals($expected, [StringComparison]::OrdinalIgnoreCase)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Save-ManagedPid {
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) {
+        return
+    }
+    [System.IO.File]::WriteAllText($PidPath, $ProcessId.ToString(), [Text.Encoding]::ASCII)
+}
+
+function Get-ManagedProcess {
+    if (Test-Path -LiteralPath $PidPath -PathType Leaf) {
+        $processId = 0
+        $raw = ([System.IO.File]::ReadAllText($PidPath)).Trim()
+        if (-not [int]::TryParse($raw, [ref]$processId)) {
+            Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
+        }
+        else {
+            $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+            if ($null -eq $process) {
+                Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
+            }
+            else {
+                $actualPath = Get-ProcessExecutablePath $process
+                if (Test-IsThisDeploymentExecutable $actualPath) {
+                    return $process
+                }
+                # PID file points at a different binary (or path is unreadable). Drop it and fall back.
+                Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    # Fallback: locate a live process whose image path is exactly this package's grok2api.exe.
+    $candidates = @(Get-Process -Name "grok2api" -ErrorAction SilentlyContinue)
+    foreach ($candidate in $candidates) {
+        $actualPath = Get-ProcessExecutablePath $candidate
+        if (Test-IsThisDeploymentExecutable $actualPath) {
+            Save-ManagedPid ([int]$candidate.Id)
+            return $candidate
+        }
+    }
+
+    # Last resort for LOCAL SERVICE children when name-based lookup is filtered:
+    # inspect listeners later via Get-PortOwnerProcess instead of inventing ownership here.
+    return $null
+}
+
+function Get-PortOwnerProcess {
+    param([int]$Value)
+    try {
+        $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Value -ErrorAction Stop)
     }
     catch {
         return $null
     }
-    if (-not $actualPath.Equals([System.IO.Path]::GetFullPath($ExecutablePath), [StringComparison]::OrdinalIgnoreCase)) {
-        Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
-        return $null
+    foreach ($listener in $listeners) {
+        $ownerId = 0
+        try {
+            $ownerId = [int]$listener.OwningProcess
+        }
+        catch {
+            continue
+        }
+        if ($ownerId -le 0) {
+            continue
+        }
+        $process = Get-Process -Id $ownerId -ErrorAction SilentlyContinue
+        if ($null -ne $process) {
+            return $process
+        }
     }
-    return $process
+    return $null
+}
+
+function Get-ForeignGrok2ApiTasks {
+    $ours = $TaskName
+    $tasks = @()
+    try {
+        $tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+            $_.TaskName -like "Grok2API-*" -and $_.TaskName -ne $ours
+        })
+    }
+    catch {
+        $tasks = @()
+    }
+    return $tasks
+}
+
+function Stop-ForeignGrok2ApiTasks {
+    # Other package installs keep their own startup tasks with RestartCount>0.
+    # Killing only the process is not enough: the foreign task restarts and reclaims :8000.
+    foreach ($foreignTask in @(Get-ForeignGrok2ApiTasks)) {
+        $name = [string]$foreignTask.TaskName
+        $state = ""
+        try {
+            $state = $foreignTask.State.ToString()
+        }
+        catch {
+            $state = ""
+        }
+        if ($state -in @("Running", "Queued")) {
+            Write-WarningLine ("Stopping foreign startup task '{0}' so it cannot reclaim the listen port." -f $name)
+            try {
+                Stop-ScheduledTask -TaskName $name -ErrorAction Stop
+            }
+            catch {
+                Write-WarningLine ("Could not stop foreign task '{0}': {1}" -f $name, $_.Exception.Message)
+            }
+        }
+        # Disable auto-start so a previous install does not come back after reboot
+        # and steal the port from this deployment. Uninstall is still the clean way
+        # to remove the task entirely; disable is the least-privilege reclaim path.
+        try {
+            Disable-ScheduledTask -TaskName $name -ErrorAction Stop | Out-Null
+            Write-Step ("Disabled foreign startup task '{0}' (previous install). Re-enable it only if you intentionally run that package again." -f $name)
+        }
+        catch {
+            Write-WarningLine ("Could not disable foreign task '{0}': {1}" -f $name, $_.Exception.Message)
+        }
+    }
+}
+
+function Stop-ForeignPortHolders {
+    param([int]$Value)
+
+    # Always neutralize other package tasks first. They restart dead children.
+    Stop-ForeignGrok2ApiTasks
+
+    $owner = Get-PortOwnerProcess $Value
+    if ($null -eq $owner) {
+        return
+    }
+    $ownerId = 0
+    try {
+        $ownerId = [int]$owner.Id
+    }
+    catch {
+        return
+    }
+    if ($ownerId -le 0) {
+        return
+    }
+
+    $ownerPath = Get-ProcessExecutablePath $owner
+    if (Test-IsThisDeploymentExecutable $ownerPath) {
+        # Already our process; keep it and let Start-Application short-circuit.
+        Save-ManagedPid $ownerId
+        return
+    }
+
+    $leaf = ""
+    if (-not [string]::IsNullOrWhiteSpace($ownerPath)) {
+        $leaf = [System.IO.Path]::GetFileName($ownerPath)
+    }
+    $isGrok2Api = $leaf.Equals("grok2api.exe", [StringComparison]::OrdinalIgnoreCase) -or `
+        ($owner.ProcessName -eq "grok2api")
+    if (-not $isGrok2Api) {
+        throw ("Port {0} is already in use by process {1} ({2}). Stop that process or choose another port." -f `
+            $Value, $ownerId, $(if ([string]::IsNullOrWhiteSpace($ownerPath)) { $owner.ProcessName } else { $ownerPath }))
+    }
+
+    Write-WarningLine ("Port {0} is held by another Grok2API install (PID {1}: {2}). Stopping it so this deployment can bind." -f `
+        $Value, $ownerId, $(if ([string]::IsNullOrWhiteSpace($ownerPath)) { "path unavailable" } else { $ownerPath }))
+    try {
+        Stop-Process -Id $ownerId -Force -ErrorAction Stop
+    }
+    catch {
+        throw ("Could not stop foreign Grok2API process {0} holding port {1}: {2}" -f $ownerId, $Value, $_.Exception.Message)
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        if ($null -eq (Get-Process -Id $ownerId -ErrorAction SilentlyContinue)) {
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    if ($null -ne (Get-Process -Id $ownerId -ErrorAction SilentlyContinue)) {
+        throw ("Foreign Grok2API process {0} did not release port {1}." -f $ownerId, $Value)
+    }
+
+    # Also clear any leftover listeners briefly held during process teardown.
+    $portDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $stillHeld = $null -ne (Get-PortOwnerProcess $Value)
+        if (-not $stillHeld) {
+            break
+        }
+        # A disabled foreign task may still be finishing its current run-task child.
+        $again = Get-PortOwnerProcess $Value
+        if ($null -ne $again) {
+            $againPath = Get-ProcessExecutablePath $again
+            $againLeaf = if ([string]::IsNullOrWhiteSpace($againPath)) { "" } else { [System.IO.Path]::GetFileName($againPath) }
+            if ($againLeaf.Equals("grok2api.exe", [StringComparison]::OrdinalIgnoreCase) -or $again.ProcessName -eq "grok2api") {
+                if (-not (Test-IsThisDeploymentExecutable $againPath)) {
+                    try { Stop-Process -Id $again.Id -Force -ErrorAction SilentlyContinue } catch { }
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $portDeadline)
+
+    if ($null -ne (Get-PortOwnerProcess $Value)) {
+        $final = Get-PortOwnerProcess $Value
+        $finalPath = Get-ProcessExecutablePath $final
+        if (-not (Test-IsThisDeploymentExecutable $finalPath)) {
+            throw ("Port {0} is still held after reclaim (PID {1}: {2})." -f `
+                $Value, $(if ($null -eq $final) { 0 } else { $final.Id }), $(if ([string]::IsNullOrWhiteSpace($finalPath)) { "unknown" } else { $finalPath }))
+        }
+    }
 }
 
 function Test-Health {
@@ -893,9 +1117,12 @@ function Wait-ForHealth {
     param([int]$Value, [int]$TimeoutSeconds = 90)
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
-        if (Test-Health $Value) {
+        $process = Get-ManagedProcess
+        if ($null -ne $process -and (Test-ProcessOwnsPort $process $Value) -and (Test-Health $Value)) {
             return $true
         }
+        # If health answers but ownership is not yet ours, keep waiting so a foreign
+        # leftover instance cannot make install report success for the wrong binary.
         Start-Sleep -Milliseconds 500
     } while ([DateTime]::UtcNow -lt $deadline)
     return $false
@@ -1149,13 +1376,8 @@ function Stop-Application {
                 Start-Sleep -Milliseconds 250
             } while ([DateTime]::UtcNow -lt $deadline)
             if ($null -ne $remaining) {
-                try {
-                    $remainingPath = [System.IO.Path]::GetFullPath($remaining.Path)
-                }
-                catch {
-                    throw "Could not verify the remaining process $processId before forced stop."
-                }
-                if (-not $remainingPath.Equals([System.IO.Path]::GetFullPath($ExecutablePath), [StringComparison]::OrdinalIgnoreCase)) {
+                $remainingPath = Get-ProcessExecutablePath $remaining
+                if (-not (Test-IsThisDeploymentExecutable $remainingPath)) {
                     throw "PID $processId no longer belongs to this deployment; it was not stopped."
                 }
                 Stop-Process -Id $processId -Force -ErrorAction Stop
@@ -1176,13 +1398,16 @@ function Stop-Application {
 
 function Start-Application {
     param([int]$Value)
+    # Always reclaim the target port from leftover installs before health checks.
+    # A foreign grok2api on :8000 previously made install report success without
+    # ever starting this package's binary.
+    Stop-ForeignPortHolders $Value
+
     $process = Get-ManagedProcess
     if ($null -ne $process) {
-        $savedPort = 0
-        if (Test-Path -LiteralPath $PortPath -PathType Leaf) {
-            [int]::TryParse(([System.IO.File]::ReadAllText($PortPath)).Trim(), [ref]$savedPort) | Out-Null
-        }
-        if ($savedPort -eq $Value -and (Test-ProcessOwnsPort $process $Value) -and (Test-Health $Value)) {
+        if ((Test-ProcessOwnsPort $process $Value) -and (Test-Health $Value)) {
+            Save-Port $Value
+            Save-ManagedPid ([int]$process.Id)
             Write-Step "Already running (PID $($process.Id))."
             return
         }
@@ -1202,15 +1427,33 @@ function Start-Application {
     Start-ScheduledTask -TaskName $TaskName
     if (-not (Wait-ForHealth $Value 90)) {
         Show-RecentErrors
+        $foreign = Get-PortOwnerProcess $Value
+        if ($null -ne $foreign) {
+            $foreignPath = Get-ProcessExecutablePath $foreign
+            if (-not (Test-IsThisDeploymentExecutable $foreignPath)) {
+                throw ("Port {0} answered health checks from a foreign process (PID {1}: {2}). Stop other Grok2API installs and retry." -f `
+                    $Value, $foreign.Id, $(if ([string]::IsNullOrWhiteSpace($foreignPath)) { $foreign.ProcessName } else { $foreignPath }))
+            }
+        }
         throw "The process did not pass /healthz within 90 seconds. Check logs above (often LOCAL SERVICE ACL, config, or port conflict)."
     }
     $process = Get-ManagedProcess
+    if ($null -eq $process) {
+        # Health may have come from our process even if the PID file was delayed.
+        $owner = Get-PortOwnerProcess $Value
+        $ownerPath = Get-ProcessExecutablePath $owner
+        if ($null -ne $owner -and (Test-IsThisDeploymentExecutable $ownerPath)) {
+            $process = $owner
+            Save-ManagedPid ([int]$owner.Id)
+        }
+    }
     if ($null -eq $process) {
         throw "The health endpoint responded, but no Grok2API process owned by this deployment was found."
     }
     if (-not (Test-ProcessOwnsPort $process $Value)) {
         throw "The health endpoint responded, but this deployment process does not own port $Value."
     }
+    Save-ManagedPid ([int]$process.Id)
     $pidText = $process.Id.ToString()
     Write-Step "Started successfully (PID $pidText)."
     Write-Host "Admin console: http://127.0.0.1:$Value"
