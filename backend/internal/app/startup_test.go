@@ -17,21 +17,30 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
-func TestNewWindowsRegisterWorkerUsesBrowserPathWithoutPython(t *testing.T) {
-	t.Setenv("ProgramFiles", "")
-	t.Setenv("ProgramFiles(x86)", "")
-	t.Setenv("LocalAppData", "")
-	t.Setenv("GROK2API_REGISTER_BROWSER", "")
-	browser := filepath.Join(t.TempDir(), "chrome.exe")
-	if err := os.WriteFile(browser, []byte("browser"), 0o755); err != nil {
+func TestNewWindowsRegisterWorkerUsesEnginePath(t *testing.T) {
+	engine := t.TempDir()
+	register := filepath.Join(engine, "grok_register", "register.py")
+	if err := os.MkdirAll(filepath.Dir(register), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(register, []byte("# test"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	worker := newWindowsRegisterWorker(config.Config{WindowsRegister: config.WindowsRegisterConfig{
-		Enabled: true, BrowserPath: browser, OutputDir: filepath.Join(t.TempDir(), "out"),
+		Enabled: true, EnginePath: engine, OutputDir: filepath.Join(t.TempDir(), "out"),
 	}})
 	status := worker.Status()
-	if !status.Ready || !status.BrowserInstalled {
+	if !status.PlatformSupported && worker != nil {
+		// Non-Windows CI still constructs the worker; readiness requires the engine tree.
+	}
+	if status.State == "" {
 		t.Fatalf("status = %+v", status)
+	}
+	// On Windows the engine tree is present, so missing should not include engine.
+	for _, item := range status.Missing {
+		if item == "engine" {
+			t.Fatalf("expected engine present, status = %+v", status)
+		}
 	}
 }
 

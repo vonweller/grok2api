@@ -121,20 +121,19 @@ deploy.bat stop
 
 ## Windows 浏览器注册机（随 deploy 自动准备）
 
-注册引擎已经编译进 `grok2api.exe`，发布包不再携带 Python 源码或运行时。双击 `deploy.bat`（默认 `install`）时，脚本会在管理员权限下自动完成：
+发布包附带 `tools/windows-register` 引擎源码。双击 `deploy.bat`（默认 `install`）时，脚本会在管理员权限下尽量自动完成：
 
-1. 优先检查 `GROK2API_REGISTER_BROWSER` 和 `windowsRegister.browserPath`
-2. 检查托管浏览器以及系统安装的 Chrome、Edge
-3. 找不到浏览器时下载固定版本 Chrome for Testing，并验证 SHA-256 后安装到数据目录
-4. 给 `data/windows-register` 及托管浏览器设置 `LOCAL SERVICE` ACL
-5. 启动 grok2api 后，在管理后台 **注册 → Windows 浏览器注册机** 使用
+1. 检测 Python 3.10+
+2. 创建 `tools/windows-register/.venv` 并安装依赖
+3. 把 CloakBrowser Chromium 安装到包内可读路径
+4. 写入 `.browser-path`，并给 `LOCAL SERVICE` 正确 ACL
+5. 启动 grok2api 后，管理后台 **注册 → Windows 浏览器注册机** 可直接使用
 
 ### 前提
 
-- 不需要 Python、venv、pip、Playwright 或 CloakBrowser
-- 已安装 Chrome/Edge 时不会额外下载浏览器
-- 系统没有兼容浏览器时，首次 `deploy.bat` 需要联网下载经过固定 SHA-256 校验的 Chrome for Testing；浏览器仍是最大的磁盘组件
-- 浏览器缺失或下载失败不会阻止核心 API/管理端启动；注册面板会显示 `ready=false`、`missing=browser`
+- 目标机已安装 **Python 3.10+**，且 `python` 在 PATH 中（或位于常见安装路径）
+- 首次 `deploy.bat` 需要联网下载 pip 依赖与 CloakBrowser
+- 若未安装 Python，核心 API/管理端仍可启动；注册面板会显示“运行环境未就绪”
 
 ### 使用
 
@@ -147,12 +146,12 @@ deploy.bat stop
 
 | 用途 | 路径 |
 | --- | --- |
-| 原生引擎 | `grok2api.exe` |
-| 托管浏览器（仅在系统浏览器缺失时） | `data/windows-register/browser/chrome.exe` |
+| 引擎 | `tools/windows-register` |
+| venv | `tools/windows-register/.venv` |
 | 输出 | `data/windows-register` |
 
 ### 安全
 
-- `data/windows-register` 含明文真实凭据，勿上传、公开或放入版本控制
+- `data/windows-register` 含真实凭据，勿上传
 - 注册机仅管理员 API 可操作
 - 日志已脱敏；仍不要把完整日志发到公开渠道

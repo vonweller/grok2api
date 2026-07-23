@@ -49,3 +49,15 @@ Thumbs.db
 /.tools/
 /.tmp/
 /tmp/
+
+# Windows register engine runtime (source under tools/windows-register is tracked)
+/tools/windows-register/.venv/
+/tools/windows-register/keys/
+/tools/windows-register/logs/
+/tools/windows-register/.env
+/tools/windows-register/.browser-path
+/tools/windows-register/**/__pycache__/
+/tools/windows-register/**/*.pyc
+/tools/windows-register/AppData/
+/tools/windows-register/.cloakbrowser/
+/tools/windows-register/browser/

@@ -51,7 +51,7 @@
 
 Grok2API 是一个内置 React 管理端的 Go 网关。它分别管理 Grok Build、Grok Web 和 Grok Console 账号池，并对外提供统一的 OpenAI 与 Anthropic 兼容接口。
 
-可选的 Windows 注册能力已接入管理端：Go 原生注册引擎可驱动本机 Chrome/Edge，结果写入 `data/windows-register`，并可导入 Web/Console 账号池。
+可选的 Windows 注册能力已接入管理端：Go 管理 `tools/windows-register` 下的 Python 注册机，结果写入 `data/windows-register`，并可导入 Web/Console 账号池。
 
 ### 项目架构
 
@@ -195,7 +195,7 @@ package.bat
 
 脚本会检测构建环境，在缺少工具时将从官方发布源下载且经过 SHA-256/SHA-512 校验的便携工具安装到仓库 `.tools` 目录，然后执行检查、构建并在 `release/` 中生成 `windows/amd64`、`windows/arm64` ZIP 与校验文件。发布包不会包含真实 `config.yaml`、数据库、媒体或日志。
 
-将匹配服务器架构的 ZIP 上传并解压到本地 NTFS 磁盘，双击其中的 `deploy.bat`。它会生成首次安全配置、注册开机启动任务并启动服务。可选的 Windows 注册机已经是 Go 原生实现，只需要 Chrome/Edge，不再需要 Python。详细命令、升级、备份与浏览器准备方式见 [Windows 部署说明](./WINDOWS_DEPLOYMENT.md)。
+将匹配服务器架构的 ZIP 上传并解压到本地 NTFS 磁盘，双击其中的 `deploy.bat`。它会生成首次安全配置、注册开机启动任务并启动服务。可选的 Windows 注册机随包提供 `tools/windows-register`，首次部署需要 Python 3.10+ 与 CloakBrowser。详细命令、升级、备份与浏览器准备方式见 [Windows 部署说明](./WINDOWS_DEPLOYMENT.md)。
 
 ### 源码运行
 

@@ -380,23 +380,29 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	}, nil
 }
 
-// newWindowsRegisterWorker builds the native Windows registration worker.
+// newWindowsRegisterWorker builds the managed Python registration worker.
 func newWindowsRegisterWorker(cfg config.Config) *windowsregisterinfra.Service {
-	browserPath := strings.TrimSpace(cfg.WindowsRegister.BrowserPath)
+	enginePath := strings.TrimSpace(cfg.WindowsRegister.EnginePath)
+	if enginePath == "" {
+		enginePath = "./tools/windows-register"
+	}
 	outputDir := strings.TrimSpace(cfg.WindowsRegister.OutputDir)
 	if outputDir == "" {
 		outputDir = "./data/windows-register"
 	}
-	if env := strings.TrimSpace(os.Getenv("GROK2API_REGISTER_BROWSER")); env != "" {
-		browserPath = env
+	if env := strings.TrimSpace(os.Getenv("GROK2API_REGISTER_ENGINE_PATH")); env != "" {
+		enginePath = env
 	}
 	if env := strings.TrimSpace(os.Getenv("GROK2API_WINDOWS_REGISTER_DIR")); env != "" {
 		outputDir = env
 	}
-	if browserPath != "" {
-		if abs, err := filepath.Abs(browserPath); err == nil {
-			browserPath = abs
-		}
+	pythonPath := strings.TrimSpace(cfg.WindowsRegister.PythonPath)
+	if env := strings.TrimSpace(os.Getenv("GROK2API_REGISTER_PYTHON")); env != "" {
+		pythonPath = env
+	}
+	// Prefer absolute paths for process cwd/output stability.
+	if abs, err := filepath.Abs(enginePath); err == nil {
+		enginePath = abs
 	}
 	if abs, err := filepath.Abs(outputDir); err == nil {
 		outputDir = abs
@@ -406,10 +412,10 @@ func newWindowsRegisterWorker(cfg config.Config) *windowsregisterinfra.Service {
 		enabled = false
 	}
 	return windowsregisterinfra.NewService(windowsregisterinfra.Config{
-		Enabled:            enabled,
-		BrowserPath:        browserPath,
-		ManagedBrowserPath: filepath.Join(outputDir, "browser", "chrome.exe"),
-		OutputDir:          outputDir,
+		Enabled:    enabled,
+		EnginePath: enginePath,
+		OutputDir:  outputDir,
+		PythonPath: pythonPath,
 	})
 }
 

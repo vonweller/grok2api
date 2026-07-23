@@ -67,12 +67,12 @@ type Config struct {
 
 // WindowsRegisterConfig configures the managed Windows registration worker.
 type WindowsRegisterConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	BrowserPath string `yaml:"browserPath"`
-	OutputDir   string `yaml:"outputDir"`
-	// Deprecated compatibility fields. Native registration ignores them.
+	Enabled    bool   `yaml:"enabled"`
 	EnginePath string `yaml:"enginePath"`
+	OutputDir  string `yaml:"outputDir"`
 	PythonPath string `yaml:"pythonPath"`
+	// BrowserPath is retained for older configs; the Python engine resolves Chromium itself.
+	BrowserPath string `yaml:"browserPath"`
 }
 
 type ServerConfig struct {
@@ -650,8 +650,9 @@ func defaultConfig() Config {
 		},
 		Frontend: FrontendConfig{PublicAPIBaseURL: DefaultPublicAPIBaseURL, StaticPath: "./frontend/dist"},
 		WindowsRegister: WindowsRegisterConfig{
-			Enabled:   true,
-			OutputDir: "./data/windows-register",
+			Enabled:    true,
+			EnginePath: "./tools/windows-register",
+			OutputDir:  "./data/windows-register",
 		},
 		Database: DatabaseConfig{
 			Driver:   "sqlite",

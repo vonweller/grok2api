@@ -50,7 +50,7 @@
 
 Grok2API is a Go gateway with a built-in React admin console. It manages independent Grok Build, Grok Web, and Grok Console account pools and exposes unified OpenAI- and Anthropic-compatible APIs.
 
-Optional Windows registration is available in the admin console: a native Go worker can drive local Chrome/Edge, write results under `data/windows-register`, and import SSO tokens into Web/Console pools.
+Optional Windows registration is available in the admin console: Go manages a Python registration worker under `tools/windows-register`, writes results to `data/windows-register`, and can import SSO tokens into Web/Console pools.
 
 ### Architecture
 
@@ -194,7 +194,7 @@ package.bat
 
 The script checks the build environment, installs checksum-verified portable tools under `.tools` when needed, runs verification and builds, then creates `windows/amd64` and `windows/arm64` ZIP files plus checksums under `release/`. Private `config.yaml`, databases, media, and logs are never included.
 
-Upload and extract the ZIP matching the server architecture onto a local NTFS drive, then double-click `deploy.bat`. It creates secure first-run configuration, registers an at-boot task, and starts the application. The optional Windows registration worker is native Go and needs Chrome or Edge, but no Python runtime. See the [Windows deployment guide](./WINDOWS_DEPLOYMENT.md) for maintenance, upgrades, backups, and browser setup.
+Upload and extract the ZIP matching the server architecture onto a local NTFS drive, then double-click `deploy.bat`. It creates secure first-run configuration, registers an at-boot task, and starts the application. The optional Windows registration worker is shipped as `tools/windows-register` and needs Python 3.10+ plus CloakBrowser on first deploy. See the [Windows deployment guide](./WINDOWS_DEPLOYMENT.md) for maintenance, upgrades, backups, and browser setup.
 
 ### Run from source
 
