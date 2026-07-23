@@ -15,6 +15,7 @@ Thumbs.db
 /config.local.yaml
 /config.*.local.yaml
 /docs/*
+/docs/rules/*
 !/docs/superpowers/
 !/docs/superpowers/**
 /backend/docs/goal/
