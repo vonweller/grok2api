@@ -385,6 +385,26 @@ function Resolve-HostPython {
     return ""
 }
 
+# Returns true when $Path is the same as $Root or a file/directory under it.
+function Test-PathUnderRoot {
+    param(
+        [string]$Path,
+        [string]$Root
+    )
+    if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($Root)) {
+        return $false
+    }
+    try {
+        $fullPath = [System.IO.Path]::GetFullPath($Path)
+        $fullRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd("\")
+        return $fullPath.Equals($fullRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            $fullPath.StartsWith($fullRoot + "\", [StringComparison]::OrdinalIgnoreCase)
+    }
+    catch {
+        return $false
+    }
+}
+
 # Returns true when tools\windows-register can create a local .venv and install packages.
 function Test-RegisterEngineWritable {
     try {
